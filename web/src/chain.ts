@@ -40,7 +40,7 @@ export class Chain {
 }
 
 export async function loadDeployment(): Promise<Deployment> {
-  const res = await fetch('/deployment.json');
+  const res = await fetch(import.meta.env.BASE_URL + 'deployment.json');
   if (!res.ok) throw new Error('deployment.json missing');
   return res.json();
 }
