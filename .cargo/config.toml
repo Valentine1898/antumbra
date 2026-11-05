@@ -1,0 +1,5 @@
+# NEAR contracts: near-sdk 5.x selects its host-function code paths only when `--cfg near` is
+# set (cargo-near does this implicitly; plain cargo needs it here). Without it `env::panic_str`
+# recurses inside the panic hook and every contract panic surfaces as a wasm `unreachable` trap.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-s", "--cfg", "near"]

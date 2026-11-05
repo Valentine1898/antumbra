@@ -1,0 +1,26 @@
+[package]
+name = "antumbra-circuits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Groth16 circuits for Antumbra (join-split, swap claim), setup, proving and NEAR encodings"
+
+[dependencies]
+antumbra-core = { path = "../antumbra-core", features = ["std", "r1cs"] }
+ark-ec = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true, features = ["std"] }
+ark-relations = { workspace = true, features = ["std"] }
+ark-r1cs-std = { workspace = true, features = ["std"] }
+ark-snark.workspace = true
+ark-groth16 = { workspace = true, features = ["std", "parallel"] }
+ark-bls12-381 = { workspace = true, features = ["std"] }
+ark-crypto-primitives = { workspace = true, features = ["std", "constraints"] }
+sha2.workspace = true
+hex.workspace = true
+
+[[bin]]
+name = "antumbra-setup"
+path = "src/bin/setup.rs"

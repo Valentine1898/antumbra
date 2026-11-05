@@ -1,0 +1,17 @@
+[package]
+name = "spike-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+near-workspaces.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+base64 = "0.22"

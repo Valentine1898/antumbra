@@ -1,0 +1,29 @@
+[package]
+name = "antumbra-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Shared primitives for Antumbra: Poseidon, notes, nullifiers, commitment tree, encodings"
+
+[features]
+default = ["std"]
+# Native-only pieces: note encryption and randomness.
+std = ["ark-ff/std", "ark-std/std", "ark-bls12-381/std", "ark-crypto-primitives/std", "dep:x25519-dalek", "dep:chacha20poly1305", "dep:rand"]
+# R1CS gadgets mirroring the native hashing (used by the circuits crate).
+r1cs = ["ark-crypto-primitives/constraints", "dep:ark-r1cs-std", "dep:ark-relations"]
+
+[dependencies]
+ark-ff.workspace = true
+ark-std.workspace = true
+ark-serialize.workspace = true
+ark-bls12-381.workspace = true
+ark-crypto-primitives.workspace = true
+ark-r1cs-std = { workspace = true, optional = true }
+ark-relations = { workspace = true, optional = true }
+borsh.workspace = true
+sha2.workspace = true
+hex.workspace = true
+x25519-dalek = { workspace = true, optional = true }
+chacha20poly1305 = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }

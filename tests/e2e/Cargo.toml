@@ -1,0 +1,22 @@
+[package]
+name = "antumbra-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+antumbra-core = { path = "../../crates/antumbra-core" }
+antumbra-circuits = { path = "../../crates/antumbra-circuits" }
+ark-ff = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
+near-workspaces.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+base64 = "0.22"
+rand.workspace = true

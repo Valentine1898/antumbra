@@ -1,0 +1,21 @@
+[package]
+name = "spike-gen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ark-ec = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true, features = ["std"] }
+ark-relations = { workspace = true, features = ["std"] }
+ark-r1cs-std = { workspace = true, features = ["std"] }
+ark-snark.workspace = true
+ark-groth16 = { workspace = true, features = ["std", "parallel"] }
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-bls12-381 = { workspace = true, features = ["std"] }
+ark-bls12-377 = { workspace = true, features = ["std"] }
+serde_json.workspace = true
+hex.workspace = true

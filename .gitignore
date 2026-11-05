@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.pem
+.near-credentials/
+.claude/settings.local.json
+
+# Generated proving keys / large artifacts (keep small fixtures only)
+**/*.zkey
+**/*.ptau
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Reference material cloned for convenience, not part of the project
+/near-hackathon-prompt-examples/
+
+# JS
+node_modules/

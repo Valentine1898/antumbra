@@ -1,0 +1,19 @@
+[package]
+name = "antumbra-pool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Antumbra shielded pool contract for NEAR"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk.workspace = true
+antumbra-core = { path = "../../crates/antumbra-core", default-features = false }
+ark-ff.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }
