@@ -80,12 +80,15 @@ The `spike` crates are independent: see [spike results](#spike-results-day-1).
 
 ## Try it in the browser
 
+Hosted: **https://valentine1898.github.io/antumbra/** (built from `web/` by
+the Pages workflow on every push). Or run it locally:
+
 ```
 cd web && npm install && npm run dev
 ```
 
-Open http://localhost:5173. The page talks to the testnet deployment in
-`deployment.json` through FastNEAR's public RPC.
+Open http://localhost:5173. Either way the page talks to the testnet
+deployment in `deployment.json` through FastNEAR's public RPC.
 
 1. **Gas payer.** Connect MyNearWallet, or expand "testnet dev key" and press
    *Create a funded dev account*: a key pair is generated in the browser and
