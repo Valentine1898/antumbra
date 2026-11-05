@@ -85,7 +85,7 @@
           </form>
 
           <form id="form-swap" class="tab hidden">
-            <p class="hint">Public: the sold amount and side. <em>Hidden: who is swapping.</em> Everyone in the epoch gets one price.</p>
+            <p class="hint">Public: the sold side and a sealed amount only the sealer can open. <em>Hidden: who is swapping, and how much.</em> Everyone in the epoch gets one price.</p>
             <div class="fields">
               <label>Sell <select id="swap-sell"></select></label>
               <label>Amount <input id="swap-amount" inputmode="numeric" value="100000" /></label>
@@ -95,7 +95,7 @@
           </form>
 
           <div id="form-claim" class="tab hidden">
-            <p class="hint">After an epoch clears, your share becomes private notes. <em>Public: which batch. Hidden: which swap.</em></p>
+            <p class="hint">Once the sealer clears an epoch, your share becomes private notes. <em>Public: which batch. Hidden: which swap, and its size.</em></p>
             <button id="claim-all" class="primary">Claim everything claimable</button>
           </div>
         </section>
@@ -117,9 +117,10 @@
             <dt>leaves</dt><dd id="leaves" class="mono"></dd>
             <dt>pair 1</dt><dd id="pair" class="mono"></dd>
             <dt>batch</dt><dd id="batch" class="mono"></dd>
+            <dt>sealer</dt><dd id="sealer" class="mono"></dd>
           </dl>
           <div class="row">
-            <button id="end-epoch" class="ghost">Execute last epoch</button>
+            <button id="end-epoch" class="ghost">Clear last epoch via TEE</button>
             <button id="mint" class="ghost">Mint 1 000 000 test tokens</button>
           </div>
         </section>

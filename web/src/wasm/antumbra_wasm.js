@@ -108,50 +108,58 @@ export class Prover {
      * @param {number} sell_asset
      * @param {string} amount_str
      * @param {number} epoch
+     * @param {string} pk_x
+     * @param {string} pk_y
      * @param {Uint8Array | number[]} seed_bytes
      * @returns {string}
      */
-    prepare_swap(wallet_json, pair_id, asset_1, asset_2, sell_asset, amount_str, epoch, seed_bytes) {
-        let deferred10_0;
-        let deferred10_1;
+    prepare_swap(wallet_json, pair_id, asset_1, asset_2, sell_asset, amount_str, epoch, pk_x, pk_y, seed_bytes) {
+        let deferred12_0;
+        let deferred12_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-            const val4 = +pair_id;
-            const val5 = +asset_1;
-            const val6 = +asset_2;
-            const val7 = +sell_asset;
-            const val8 = +epoch;
-            let ptr0, len0, ptr1, len1, ptr2, len2;
+            const val6 = +pair_id;
+            const val7 = +asset_1;
+            const val8 = +asset_2;
+            const val9 = +sell_asset;
+            const val10 = +epoch;
+            let ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4;
             try {
                 ptr0 = passStringToWasm0(wallet_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
                 len0 = WASM_VECTOR_LEN;
                 ptr1 = passStringToWasm0(amount_str, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
                 len1 = WASM_VECTOR_LEN;
-                ptr2 = passArray8ToWasm0(seed_bytes, wasm.__wbindgen_export2);
+                ptr2 = passStringToWasm0(pk_x, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
                 len2 = WASM_VECTOR_LEN;
+                ptr3 = passStringToWasm0(pk_y, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+                len3 = WASM_VECTOR_LEN;
+                ptr4 = passArray8ToWasm0(seed_bytes, wasm.__wbindgen_export2);
+                len4 = WASM_VECTOR_LEN;
             } catch (e) {
+                if (ptr4) { wasm.__wbindgen_export(ptr4, len4 * 1, 1); }
+                if (ptr3) { wasm.__wbindgen_export(ptr3, len3 * 1, 1); }
                 if (ptr2) { wasm.__wbindgen_export(ptr2, len2 * 1, 1); }
                 if (ptr1) { wasm.__wbindgen_export(ptr1, len1 * 1, 1); }
                 if (ptr0) { wasm.__wbindgen_export(ptr0, len0 * 1, 1); }
                 throw e;
             }
-            wasm.prover_prepare_swap(retptr, this.__wbg_ptr, ptr0, len0, val4, val5, val6, val7, ptr1, len1, val8, ptr2, len2);
+            wasm.prover_prepare_swap(retptr, this.__wbg_ptr, ptr0, len0, val6, val7, val8, val9, ptr1, len1, val10, ptr2, len2, ptr3, len3, ptr4, len4);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
             var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr9 = r0;
-            var len9 = r1;
+            var ptr11 = r0;
+            var len11 = r1;
             if (r3) {
-                ptr9 = 0; len9 = 0;
+                ptr11 = 0; len11 = 0;
                 throw takeFromExternrefTable0(r2);
             }
-            deferred10_0 = ptr9;
-            deferred10_1 = len9;
-            return getStringFromWasm0(ptr9, len9);
+            deferred12_0 = ptr11;
+            deferred12_1 = len11;
+            return getStringFromWasm0(ptr11, len11);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export(deferred10_0, deferred10_1, 1);
+            wasm.__wbindgen_export(deferred12_0, deferred12_1, 1);
         }
     }
     /**

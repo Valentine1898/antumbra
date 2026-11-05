@@ -15,10 +15,17 @@ export const local = {
   },
 };
 
+/// Bump when a circuit changes: proving keys cached under an older version are dropped on open.
+const PROVING_KEYS_VERSION = 2;
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('antumbra', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('proving-keys');
+    const req = indexedDB.open('antumbra', PROVING_KEYS_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (db.objectStoreNames.contains('proving-keys')) db.deleteObjectStore('proving-keys');
+      db.createObjectStore('proving-keys');
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });

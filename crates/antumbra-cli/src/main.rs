@@ -117,15 +117,13 @@ enum Cmd {
         #[arg(long)]
         amount: u128,
     },
-    /// Execute a finished epoch's batch for a pair.
-    EndEpoch {
-        #[arg(long)]
-        pair: u32,
-        #[arg(long)]
-        epoch: Option<u64>,
-    },
-    /// Claim every executed swap into private notes.
+    /// Claim every cleared swap into private notes.
     Claim,
+    /// The sealer: opens sealed swap amounts and clears epochs with signed totals.
+    Sealer {
+        #[command(subcommand)]
+        cmd: SealerCmd,
+    },
     /// Deploy the pool and test tokens, seed liquidity, write deployment.json.
     /// With --account/--key the contracts go to fresh subaccounts of that funded
     /// account (works on testnet and on a local sandbox); without them a testnet
@@ -171,11 +169,78 @@ struct Deployment {
     deployer: String,
 }
 
+#[derive(Subcommand)]
+enum SealerCmd {
+    /// Print the sealer's public key and the executor's public key.
+    Pubkey,
+    /// Register the sealer keys on the pool (signs as the pool account).
+    Register {
+        /// OutLayer request contract to clear epochs inside a TEE (optional).
+        #[arg(long)]
+        outlayer_account: Option<String>,
+        #[arg(long)]
+        wasm_url: Option<String>,
+        #[arg(long)]
+        wasm_hash: Option<String>,
+        #[arg(long)]
+        secrets_profile: Option<String>,
+    },
+    /// Open and clear a finished epoch (default: every uncleared one in the lookback window).
+    Clear {
+        #[arg(long)]
+        pair: u32,
+        #[arg(long)]
+        epoch: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        lookback: u64,
+    },
+    /// Keep clearing finished epochs as they end. Each tick is one view call
+    /// per epoch in the lookback window, so keep the window small on public RPCs.
+    Watch {
+        #[arg(long)]
+        pair: u32,
+        #[arg(long, default_value_t = 15)]
+        interval_secs: u64,
+        #[arg(long, default_value_t = 5)]
+        lookback: u64,
+    },
+}
+
 #[derive(Serialize, Deserialize)]
 struct Secrets {
     deployer_account: String,
     deployer_key: String,
     pool_key: String,
+    /// Sealer secret (hex) and executor signing key seed (hex): the signed-executor path.
+    #[serde(default)]
+    sealer_seed: Option<String>,
+    #[serde(default)]
+    executor_key: Option<String>,
+}
+
+fn random_hex32() -> String {
+    hex::encode(rand::random::<[u8; 32]>())
+}
+
+fn sealer_secrets(sec: &Secrets) -> Result<ops::SealerSecrets> {
+    let seed = hex::decode(sec.sealer_seed.as_ref().ok_or_else(|| {
+        anyhow!("no sealer_seed in the secret file; run `antumbra sealer keygen` or `deploy`")
+    })?)?;
+    let ek: [u8; 32] = hex::decode(
+        sec.executor_key
+            .as_ref()
+            .ok_or_else(|| anyhow!("no executor_key in the secret file"))?,
+    )?
+    .try_into()
+    .map_err(|_| anyhow!("executor_key must be 32 bytes"))?;
+    Ok(ops::SealerSecrets {
+        seed,
+        executor: ed25519_dalek::SigningKey::from_bytes(&ek),
+    })
+}
+
+fn new_sealer_secrets() -> (String, String) {
+    (random_hex32(), random_hex32())
 }
 
 fn load_deployment(path: &Path) -> Option<Deployment> {
@@ -329,13 +394,9 @@ async fn main() -> Result<()> {
             let (epoch, r) = ops::swap(&mut w, &chain, &keys, *pair, *sell, *amount).await?;
             w.save(&cli.wallet)?;
             println!("swap submitted for epoch {epoch}: {}", describe(&r));
-            println!("after the epoch ends run `antumbra end-epoch --pair {pair}` (or just `antumbra claim`)");
+            println!("after the epoch ends the sealer clears it (`antumbra sealer clear --pair {pair}`), then `antumbra claim`");
         }
-        Cmd::EndEpoch { pair, epoch } => {
-            let chain = cli.chain().await?;
-            let (epoch, r) = ops::end_epoch(&chain, *pair, *epoch).await?;
-            println!("epoch {epoch} executed: {}", describe(&r));
-        }
+        Cmd::Sealer { cmd } => sealer_cmd(&cli, cmd).await?,
         Cmd::Claim => {
             let mut w = cli.wallet()?;
             let chain = cli.chain().await?;
@@ -363,6 +424,9 @@ async fn main() -> Result<()> {
                         blocks_left,
                     } => println!(
                         "swap #{index} waits for epoch {epoch} to end (~{blocks_left} blocks)"
+                    ),
+                    ClaimOutcome::NotCleared { index, epoch } => println!(
+                        "swap #{index}: epoch {epoch} has ended but the sealer has not cleared it yet (run `antumbra sealer clear --pair <id>`)"
                     ),
                 }
             }
@@ -535,6 +599,24 @@ async fn deploy(
         }
         println!("pair {pair_id}: {liquidity} / {liquidity} liquidity seeded");
     }
+    // The sealer keys: what swap amounts are encrypted to, and who may sign cleared totals.
+    let (sealer_seed, executor_key) = new_sealer_secrets();
+    let sealer = sealer_secrets(&Secrets {
+        deployer_account: String::new(),
+        deployer_key: String::new(),
+        pool_key: String::new(),
+        sealer_seed: Some(sealer_seed.clone()),
+        executor_key: Some(executor_key.clone()),
+    })?;
+    let (px, py, epk) = sealer.public_parts();
+    let _ = ensure_ok(
+        pool.call("set_sealer")
+            .args_json(json!({"pk": [px, py], "executor_pk": epk}))
+            .max_gas()
+            .transact()
+            .await?,
+    )?;
+    println!("sealer registered (signed executor path); keep its secrets in the secret file");
     let deployment = Deployment {
         network: cli.network.clone(),
         pool: pool.id().to_string(),
@@ -547,6 +629,8 @@ async fn deploy(
         deployer_account: deployer.id().to_string(),
         deployer_key: deployer.secret_key().to_string(),
         pool_key: pool.as_account().secret_key().to_string(),
+        sealer_seed: Some(sealer_seed),
+        executor_key: Some(executor_key),
     };
     let secret_path = cli.deployment.with_extension("secret.json");
     fs::write(&secret_path, serde_json::to_string_pretty(&secrets)?)?;
@@ -565,4 +649,100 @@ fn rand_suffix() -> u32 {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     (nanos ^ std::process::id()) & 0xff_ffff
+}
+
+async fn sealer_cmd(cli: &Cli, cmd: &SealerCmd) -> Result<()> {
+    let sec = load_secrets(&cli.deployment)
+        .ok_or_else(|| anyhow!("no secret file next to {}", cli.deployment.display()))?;
+    let dep = load_deployment(&cli.deployment)
+        .ok_or_else(|| anyhow!("no deployment file {}", cli.deployment.display()))?;
+    match cmd {
+        SealerCmd::Pubkey => {
+            let (px, py, epk) = sealer_secrets(&sec)?.public_parts();
+            println!("sealer pk: [{px}, {py}]");
+            println!("executor pk: {epk}");
+        }
+        SealerCmd::Register {
+            outlayer_account,
+            wasm_url,
+            wasm_hash,
+            secrets_profile,
+        } => {
+            let (px, py, epk) = sealer_secrets(&sec)?.public_parts();
+            // The pool account is its own owner, so registration signs with the pool key.
+            let chain = Chain::connect(
+                &cli.network,
+                cli.rpc.as_deref(),
+                &dep.pool,
+                &sec.pool_key,
+                &dep.pool,
+            )
+            .await?;
+            let outlayer = match (outlayer_account, wasm_url, wasm_hash) {
+                (Some(a), Some(u), Some(h)) => {
+                    json!({"account": a, "wasm_url": u, "wasm_hash": h, "secrets_profile": secrets_profile})
+                }
+                (None, None, None) => json!(null),
+                _ => {
+                    return Err(anyhow!(
+                        "pass --outlayer-account, --wasm-url and --wasm-hash together"
+                    ))
+                }
+            };
+            let r = ensure_ok(
+                chain
+                    .call(
+                        "set_sealer",
+                        json!({"pk": [px, py], "executor_pk": epk, "outlayer": outlayer}),
+                    )
+                    .await?,
+            )?;
+            println!("sealer registered: {}", describe(&r));
+        }
+        SealerCmd::Clear {
+            pair,
+            epoch,
+            lookback,
+        } => {
+            let chain = cli.chain().await?;
+            let secrets = sealer_secrets(&sec)?;
+            let cleared = match epoch {
+                Some(e) => vec![ops::clear_epoch(&chain, &secrets, *pair, *e).await?],
+                None => ops::clear_pending(&chain, &secrets, *pair, *lookback).await?,
+            };
+            if cleared.is_empty() {
+                println!("nothing to clear");
+            }
+            for c in cleared {
+                println!(
+                    "epoch {} cleared: {} sealed swaps, totals {} / {} | {}",
+                    c.epoch, c.entries, c.delta_1, c.delta_2, c.summary
+                );
+            }
+        }
+        SealerCmd::Watch {
+            pair,
+            interval_secs,
+            lookback,
+        } => {
+            let chain = cli.chain().await?;
+            let secrets = sealer_secrets(&sec)?;
+            println!("sealer watching pair {pair} every {interval_secs}s; ctrl-c to stop");
+            loop {
+                match ops::clear_pending(&chain, &secrets, *pair, *lookback).await {
+                    Ok(cleared) => {
+                        for c in cleared {
+                            println!(
+                                "epoch {} cleared: {} sealed swaps, totals {} / {} | {}",
+                                c.epoch, c.entries, c.delta_1, c.delta_2, c.summary
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("clear failed: {e:#}"),
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(*interval_secs)).await;
+            }
+        }
+    }
+    Ok(())
 }

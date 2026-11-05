@@ -14,7 +14,7 @@ use antumbra_core::{
     crypto::{self, NotePlaintext, Plaintext, SwapPlaintext},
     encoding::{fr_from_hex, fr_to_hex, negative_amount},
     note::{withdraw_ext_hash, Bsod, Note, SwapRecord, DIR_1_TO_2, DIR_2_TO_1},
-    tree, Fr,
+    sealing, tree, Fr,
 };
 use anyhow::{anyhow, Result};
 use ark_ff::{UniformRand, Zero};
@@ -358,7 +358,8 @@ pub fn prepare_withdraw(
     )
 }
 
-/// Sells `amount` of `sell_asset` on a pair `(asset_1, asset_2)` in `epoch`.
+/// Sells `amount` of `sell_asset` on a pair `(asset_1, asset_2)` in `epoch`,
+/// with the amount sealed to the pool's registered sealer key `sealer_pk` (hex x, y).
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_swap(
     wallet: &WalletFile,
@@ -368,8 +369,14 @@ pub fn prepare_swap(
     sell_asset: u32,
     amount: u128,
     epoch: u64,
+    sealer_pk: (&str, &str),
     rng: &mut Rng,
 ) -> Result<Prepared> {
+    let pk = sealing::point_from_xy(
+        fr_from_hex(sealer_pk.0).ok_or_else(|| anyhow!("bad sealer pk.x"))?,
+        fr_from_hex(sealer_pk.1).ok_or_else(|| anyhow!("bad sealer pk.y"))?,
+    )
+    .ok_or_else(|| anyhow!("sealer pk is not a valid point"))?;
     let direction = if sell_asset == pair_assets.0 {
         DIR_1_TO_2
     } else if sell_asset == pair_assets.1 {
@@ -395,7 +402,9 @@ pub fn prepare_swap(
         rseed: random_fr(rng),
     };
     let root = tree::root_of(&wallet.leaves_fr());
-    let circuit = SwapCircuit::new(root, sell_asset, inputs, change, record);
+    let delta_r = random_fr(rng);
+    let eph = sealing::scalar_from_seed(&seed32(rng));
+    let circuit = SwapCircuit::new(root, sell_asset, inputs, change, record, pk, delta_r, eph);
     let public = circuit.public.clone();
     let proof = keys::prove(&keys.swap, circuit, seed32(rng));
     let swap_ct = seal(
@@ -421,9 +430,15 @@ pub fn prepare_swap(
         "epoch": epoch,
         "pair_id": pair_id,
         "direction": direction,
-        "delta": amount.to_string(),
+        "delta_cm": fr_to_hex(&public.delta_cm),
+        "epk": [fr_to_hex(&public.epk.0), fr_to_hex(&public.epk.1)],
+        "ct": [fr_to_hex(&public.ct[0]), fr_to_hex(&public.ct[1])],
     });
-    let public_view = json!({"epoch": epoch, "pair_id": pair_id, "direction": direction, "delta": amount.to_string(), "nullifiers": args["nullifiers"]});
+    let public_view = json!({
+        "epoch": epoch, "pair_id": pair_id, "direction": direction,
+        "sealed_amount": {"delta_cm": args["delta_cm"], "epk": args["epk"], "ct": args["ct"]},
+        "nullifiers": args["nullifiers"],
+    });
     Ok(Prepared {
         method: "swap".into(),
         args,

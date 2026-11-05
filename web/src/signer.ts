@@ -1,6 +1,7 @@
 // Two ways to pay for transactions: a NEAR wallet through wallet-selector, or a
 // testnet dev key held in the page (demo only).
-import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions } from 'near-api-js';
+import { makeProvider } from './chain';
+import { Account, KeyPair, KeyPairSigner, actions } from 'near-api-js';
 import { setupWalletSelector, type WalletSelector } from '@near-wallet-selector/core';
 import { setupMyNearWallet } from '@near-wallet-selector/my-near-wallet';
 import { setupModal, type WalletSelectorModal } from '@near-wallet-selector/modal-ui';
@@ -34,9 +35,9 @@ export class DevKeySigner implements Signer {
   kind = 'devkey' as const;
   accountId: string;
   private account: Account;
-  constructor(accountId: string, secretKey: string, rpcUrl: string) {
+  constructor(accountId: string, secretKey: string, rpcUrls: string[]) {
     this.accountId = accountId;
-    const provider = new JsonRpcProvider({ url: rpcUrl });
+    const provider = makeProvider(rpcUrls);
     this.account = new Account(accountId, provider, KeyPairSigner.fromSecretKey(secretKey as any));
   }
   async call(receiverId: string, method: string, args: Record<string, unknown>, gasTgas: number, depositYocto: string): Promise<CallOutcome> {

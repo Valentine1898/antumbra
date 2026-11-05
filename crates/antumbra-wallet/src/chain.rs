@@ -43,6 +43,17 @@ pub struct BatchInfo {
     pub unfilled_1: String,
     pub unfilled_2: String,
     pub bsod_hash: Option<String>,
+    #[serde(default)]
+    pub entries: u32,
+    #[serde(default)]
+    pub entries_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SealerInfo {
+    pub pk: [String; 2],
+    pub executor_pk: String,
+    pub outlayer: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,6 +180,26 @@ impl Chain {
 
     pub async fn get_asset_id(&self, token: &AccountId) -> Result<Option<u32>> {
         self.view("get_asset_id", json!({"token": token})).await
+    }
+
+    pub async fn get_sealer(&self) -> Result<Option<SealerInfo>> {
+        self.view("get_sealer", json!({})).await
+    }
+
+    pub async fn get_batch_entries(
+        &self,
+        epoch: u64,
+        pair_id: u32,
+    ) -> Result<Vec<antumbra_sealer::EntryJson>> {
+        let mut out = vec![];
+        loop {
+            let page: Vec<antumbra_sealer::EntryJson> = self.view("get_batch_entries", json!({"epoch": epoch, "pair_id": pair_id, "from": out.len() as u32, "limit": 64})).await?;
+            if page.is_empty() {
+                break;
+            }
+            out.extend(page);
+        }
+        Ok(out)
     }
 }
 

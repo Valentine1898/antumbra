@@ -1,5 +1,10 @@
 // Read-only view of the pool and tokens through a NEAR RPC endpoint.
-import { JsonRpcProvider } from 'near-api-js';
+import { FailoverRpcProvider, JsonRpcProvider } from 'near-api-js';
+
+/// Public testnet RPCs rate-limit per IP; a failover provider moves on to the next one when a call fails.
+export function makeProvider(urls: string[]): FailoverRpcProvider {
+  return new FailoverRpcProvider(urls.map((url) => new JsonRpcProvider({ url })));
+}
 
 export interface Deployment { network: string; pool: string; tokens: string[]; pair_id: number; deployer: string }
 export interface EpochInfo { epoch: number; block_height: number; blocks_left: number }
@@ -8,17 +13,20 @@ export interface BatchInfo {
   epoch: number; pair_id: number; executed: boolean;
   delta_1: string; delta_2: string; lambda_1: string; lambda_2: string; unfilled_1: string; unfilled_2: string;
   bsod_hash: string | null;
+  entries: number;
+  entries_hash: string;
 }
 export interface LeafInfo { position: number; cm: string; ciphertext: string }
+export interface SealerInfo { pk: [string, string]; executor_pk: string; outlayer: { account: string; wasm_url: string; wasm_hash: string } | null }
 
 export class Chain {
-  provider: JsonRpcProvider;
-  rpcUrl: string;
+  provider: FailoverRpcProvider;
+  rpcUrls: string[];
   pool: string;
-  constructor(rpcUrl: string, pool: string) {
-    this.rpcUrl = rpcUrl;
+  constructor(rpcUrls: string[], pool: string) {
+    this.rpcUrls = rpcUrls;
     this.pool = pool;
-    this.provider = new JsonRpcProvider({ url: rpcUrl });
+    this.provider = makeProvider(rpcUrls);
   }
   async view<T>(method: string, args: Record<string, unknown> = {}): Promise<T> {
     return (await this.provider.callFunction({ contractId: this.pool, method, args })) as T;
@@ -31,6 +39,7 @@ export class Chain {
   isSpent(nullifier: string) { return this.view<boolean>('is_spent', { nullifier }); }
   getToken(asset_id: number) { return this.view<string | null>('get_token', { asset_id }); }
   getRoot() { return this.view<string>('get_root'); }
+  getSealer() { return this.view<SealerInfo | null>('get_sealer'); }
   async ftBalance(token: string, account: string): Promise<string> {
     return (await this.provider.callFunction({ contractId: token, method: 'ft_balance_of', args: { account_id: account } })) as string;
   }

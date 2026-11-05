@@ -11,15 +11,17 @@ default = ["std"]
 # Note encryption (pure; works in wasm). Randomness is supplied by the caller.
 crypto = ["dep:x25519-dalek", "dep:chacha20poly1305"]
 # Native conveniences on top: OS randomness.
-std = ["crypto", "ark-ff/std", "ark-std/std", "ark-bls12-381/std", "ark-crypto-primitives/std", "dep:rand"]
+std = ["crypto", "ark-ff/std", "ark-std/std", "ark-bls12-381/std", "ark-ed-on-bls12-381/std", "ark-crypto-primitives/std", "dep:rand"]
 # R1CS gadgets mirroring the native hashing (used by the circuits crate).
-r1cs = ["ark-crypto-primitives/constraints", "dep:ark-r1cs-std", "dep:ark-relations"]
+r1cs = ["ark-crypto-primitives/constraints", "dep:ark-r1cs-std", "dep:ark-relations", "ark-ed-on-bls12-381/r1cs"]
 
 [dependencies]
 ark-ff.workspace = true
 ark-std.workspace = true
 ark-serialize.workspace = true
 ark-bls12-381.workspace = true
+ark-ed-on-bls12-381.workspace = true
+ark-ec.workspace = true
 ark-crypto-primitives.workspace = true
 ark-r1cs-std = { workspace = true, optional = true }
 ark-relations = { workspace = true, optional = true }

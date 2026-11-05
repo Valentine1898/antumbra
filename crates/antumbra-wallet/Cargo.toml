@@ -9,11 +9,12 @@ description = "Antumbra wallet: local state, proving and the user-level operatio
 [features]
 default = ["native"]
 # near-workspaces chain client and OS randomness (CLI). Off for the wasm build.
-native = ["dep:near-workspaces", "dep:rand", "antumbra-core/std", "antumbra-circuits/parallel"]
+native = ["dep:near-workspaces", "dep:rand", "dep:ed25519-dalek", "antumbra-core/std", "antumbra-circuits/parallel"]
 
 [dependencies]
 antumbra-core = { path = "../antumbra-core", default-features = false, features = ["crypto"] }
 antumbra-circuits = { path = "../antumbra-circuits", default-features = false }
+antumbra-sealer = { path = "../antumbra-sealer" }
 ark-ff = { workspace = true, features = ["std"] }
 ark-std = { workspace = true, features = ["std"] }
 ark-serialize = { workspace = true, features = ["std"] }
@@ -24,3 +25,4 @@ anyhow.workspace = true
 hex.workspace = true
 base64 = "0.22"
 rand = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true, optional = true }

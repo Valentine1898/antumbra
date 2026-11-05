@@ -22,6 +22,7 @@ ark-r1cs-std = { workspace = true, features = ["std"] }
 ark-snark.workspace = true
 ark-groth16 = { workspace = true, features = ["std"] }
 ark-bls12-381 = { workspace = true, features = ["std"] }
+ark-ed-on-bls12-381 = { workspace = true, features = ["std", "r1cs"] }
 ark-crypto-primitives = { workspace = true, features = ["std", "constraints"] }
 sha2.workspace = true
 primitive-types = { version = "0.14", default-features = false }

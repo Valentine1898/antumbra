@@ -24,10 +24,11 @@ the log panel; the CLI (`scripts/demo.sh`) is the fallback.
    Bob's window press Sync: the note is found by trial decryption. The log
    and the explorer show two nullifiers and two commitments, nothing else.
 5. **Swap (45 s).** Swap 100 000 of asset 1: the proof is built in the browser
-   in about three seconds. Explain: the burned amount is public but unlinkable,
-   the swap commitment goes into the tree, the epoch batch accumulates. Wait
-   for the epoch countdown, press Claim: the batch executes (one clearing
-   price for everyone) and the bought asset appears as a private note.
+   in about three seconds. Explain: the chain stores a commitment and a
+   ciphertext only the sealer can open; Geek mode shows the batch with one
+   sealed entry and no amount. When the epoch ends the sealer clears it
+   (`antumbra sealer watch` running in a terminal, or the TEE) and the batch
+   totals appear. Press Claim: the bought asset appears as a private note.
 6. **Withdraw (20 s).** Withdraw the bought asset to the NEAR account; the
    explorer shows the `ft_transfer`, the pool reserves moved.
 7. **Verification story (20 s).** `scripts/check.sh` output: unit tests,
@@ -43,10 +44,11 @@ gas and the pool state.
 > Built at NEAR HACKATHON: Antumbra, a shielded pool with batch swaps on
 > @NEARProtocol.
 >
-> Private transfers, swaps that clear at one price per epoch, and private
-> claims, each a single Groth16 proof verified on-chain with NEAR's
-> BLS12-381 host functions (17 Tgas). Three circuits, a Rust contract, a CLI
-> wallet, live on testnet.
+> Private transfers, swaps with sealed amounts that clear at one price per
+> epoch, and private claims, each a single Groth16 proof verified on-chain
+> with NEAR's BLS12-381 host functions (17 Tgas). Three circuits, a Rust
+> contract, a browser wallet that proves in a Web Worker, a sealer that runs
+> in a TEE. Live on testnet.
 >
 > Repo + demo video below. #NEARHackathon
 

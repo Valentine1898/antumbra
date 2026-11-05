@@ -170,11 +170,55 @@ setups (cached on disk) and submits actions through near-workspaces. The
 is visible on-chain as the gas payer; a relayer or a dedicated account breaks
 that link.
 
+## Sealed amounts
+
+The chain never learns a swap's amount. The swap circuit proves a
+*verifiable encryption* of `(delta, r)` to the sealer's key:
+
+```
+sealer key   sk ∈ Jubjub scalars, PK = sk·G          (registered on the contract)
+ephemeral    e,  EPK = e·G,  S = e·PK
+key          k  = H(DOM_SEALKEY, S.x, S.y)
+ciphertext   ct = [delta + H(DOM_SEAL, k, 0), r + H(DOM_SEAL, k, 1)]
+commitment   delta_cm = H(DOM_DELTA, delta, r)
+```
+
+Jubjub's base field is BLS12-381's scalar field, so the two scalar
+multiplications, the Poseidon pad and the commitment are all native in the
+circuit (about 6 000 extra constraints). Public inputs of the sealed swap:
+`root, asset_id, nf_1, nf_2, cm_change, scm, epoch, pair_id, direction,
+delta_cm, EPK.x, EPK.y, ct_0, ct_1, PK.x, PK.y`. The contract checks `PK` is
+the registered sealer key, stores `(direction, delta_cm, EPK, ct)` in the
+batch and never sees `delta`. Because the proof binds the ciphertext to the
+committed amount, the sealer can trust every entry it decrypts.
+
+Clearing an epoch: the sealer receives the batch entries, decrypts them,
+recomputes `delta_cm` for each, sums per direction and returns
+`(entries_hash, delta_1, delta_2)` where `entries_hash = sha256` over the
+entries in order. Two ways to deliver the result:
+
+- **OutLayer (TEE).** `end_epoch` asks `outlayer.testnet` to run the sealer
+  program (pinned by its wasm hash) on the batch; OutLayer only accepts
+  results from workers attested inside Intel TDX, and the contract's callback
+  checks `entries_hash` before executing the batch. The sealer's secret is a
+  `PROTECTED_` secret that is generated inside the TEE and injected only into
+  that program.
+- **Signed executor.** `end_epoch_signed(epoch, pair, delta_1, delta_2,
+  signature)` with an ed25519 signature by the registered executor key over
+  `sha256("antumbra-sealed-totals-v1" || pool || epoch || pair || entries_hash
+  || delta_1 || delta_2)`. Same program, run by the pool operator (or inside
+  any other TEE); the trust root is the registered key. Used by the tests and
+  the local demo.
+
+Either way the batch then executes exactly as before and the claim circuit is
+unchanged: the claimer already knows their own `delta`. What stays public per
+swap: the sold side (`asset_id` and `direction`), the nullifiers and the
+commitments. What became private: the amount.
+
 ## Stretch, in order
 
 1. Route the net batch through NEAR Intents (1Click, confidential) instead of
    the internal pool, so liquidity comes from the solver network.
-2. Sealed deltas: encrypt `delta` to an enclave key (OutLayer); the enclave
-   publishes only batch totals plus an attestation; the contract verifies the
-   attestation, so even per-swap amounts stay hidden.
-3. Web UI with a wasm prover.
+2. Hide the sold side as well (a two-asset join-split), so a swap reveals
+   nothing but its existence.
+3. Web UI with a wasm prover (done, see `web/`).

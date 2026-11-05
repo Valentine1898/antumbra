@@ -227,6 +227,8 @@ impl Prover {
         sell_asset: u32,
         amount_str: &str,
         epoch: f64,
+        pk_x: &str,
+        pk_y: &str,
         seed_bytes: &[u8],
     ) -> Result<String, JsError> {
         js((|| {
@@ -239,6 +241,7 @@ impl Prover {
                 sell_asset,
                 amount(amount_str)?,
                 epoch as u64,
+                (pk_x, pk_y),
                 &mut rng(seed_bytes)?,
             )?;
             Ok(serde_json::to_string(&p)?)

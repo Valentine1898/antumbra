@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [dev-dependencies]
 antumbra-core = { path = "../../crates/antumbra-core" }
 antumbra-circuits = { path = "../../crates/antumbra-circuits" }
+antumbra-sealer = { path = "../../crates/antumbra-sealer" }
+ed25519-dalek.workspace = true
 ark-ff = { workspace = true, features = ["std"] }
 ark-std = { workspace = true, features = ["std"] }
 near-workspaces.workspace = true

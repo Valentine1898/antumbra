@@ -6,6 +6,7 @@ use crate::{
     pure::{self, LeafData, Rng},
     state::{Address, WalletFile},
 };
+use antumbra_core::encoding::fr_to_hex;
 use anyhow::{anyhow, Result};
 use near_workspaces::{result::ExecutionFinalResult, AccountId};
 use serde_json::json;
@@ -118,7 +119,7 @@ pub async fn withdraw(
     submit(wallet, chain, p).await
 }
 
-/// Sells `amount` of `sell_asset` on `pair_id` in the current epoch.
+/// Sells `amount` of `sell_asset` on `pair_id` in the current epoch, sealed to the pool's sealer.
 pub async fn swap(
     wallet: &mut WalletFile,
     chain: &Chain,
@@ -131,6 +132,10 @@ pub async fn swap(
         .get_pair(pair_id)
         .await?
         .ok_or_else(|| anyhow!("unknown pair {pair_id}"))?;
+    let sealer = chain
+        .get_sealer()
+        .await?
+        .ok_or_else(|| anyhow!("the pool has no sealer registered yet"))?;
     let epoch = chain.current_epoch().await?.epoch;
     let p = pure::prepare_swap(
         wallet,
@@ -140,33 +145,110 @@ pub async fn swap(
         sell_asset,
         amount,
         epoch,
+        (&sealer.pk[0], &sealer.pk[1]),
         &mut rng(),
     )?;
     let r = submit(wallet, chain, p).await?;
     Ok((epoch, r))
 }
 
-/// Executes a finished epoch for a pair (default: the most recent finished one).
-pub async fn end_epoch(
+/// The sealer's secrets for the signed executor path.
+pub struct SealerSecrets {
+    pub seed: Vec<u8>,
+    pub executor: ed25519_dalek::SigningKey,
+}
+
+impl SealerSecrets {
+    pub fn sealer_key(&self) -> antumbra_core::sealing::SealerKey {
+        antumbra_core::sealing::SealerKey::from_seed(&self.seed)
+    }
+    /// `(pk_x hex, pk_y hex, executor pk hex)` for `set_sealer`.
+    pub fn public_parts(&self) -> (String, String, String) {
+        let (x, y) = self.sealer_key().pk_xy();
+        (
+            fr_to_hex(&x),
+            fr_to_hex(&y),
+            hex::encode(self.executor.verifying_key().to_bytes()),
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Cleared {
+    pub epoch: u64,
+    pub entries: usize,
+    pub delta_1: u128,
+    pub delta_2: u128,
+    pub summary: String,
+}
+
+/// Runs the sealer on a finished epoch and submits the signed totals.
+pub async fn clear_epoch(
     chain: &Chain,
+    secrets: &SealerSecrets,
     pair_id: u32,
-    epoch: Option<u64>,
-) -> Result<(u64, ExecutionFinalResult)> {
-    let epoch = match epoch {
-        Some(e) => e,
-        None => chain
-            .current_epoch()
-            .await?
-            .epoch
-            .checked_sub(1)
-            .ok_or_else(|| anyhow!("no finished epoch yet"))?,
-    };
+    epoch: u64,
+) -> Result<Cleared> {
+    let entries_json = chain.get_batch_entries(epoch, pair_id).await?;
+    let entries: Vec<antumbra_core::sealing::SealedEntry> = entries_json
+        .iter()
+        .map(|e| e.to_entry())
+        .collect::<Result<_>>()?;
+    let totals = antumbra_sealer::clear(&secrets.sealer_key(), epoch, pair_id, &entries);
+    if !totals.invalid.is_empty() {
+        return Err(anyhow!(
+            "entries {:?} did not open to their commitments",
+            totals.invalid
+        ));
+    }
+    let msg = antumbra_core::sealing::totals_message(
+        chain.pool.as_str(),
+        epoch,
+        pair_id,
+        &totals.entries_hash,
+        totals.delta_1,
+        totals.delta_2,
+    );
+    use ed25519_dalek::Signer;
+    let sig = secrets.executor.sign(&msg).to_bytes();
     let r = ensure_ok(
         chain
-            .call("end_epoch", json!({"epoch": epoch, "pair_id": pair_id}))
+            .call(
+                "end_epoch_signed",
+                json!({
+                    "epoch": epoch, "pair_id": pair_id,
+                    "delta_1": totals.delta_1.to_string(), "delta_2": totals.delta_2.to_string(),
+                    "signature": pure::b64(&sig),
+                }),
+            )
             .await?,
     )?;
-    Ok((epoch, r))
+    Ok(Cleared {
+        epoch,
+        entries: entries.len(),
+        delta_1: totals.delta_1,
+        delta_2: totals.delta_2,
+        summary: describe(&r),
+    })
+}
+
+/// Clears every finished epoch of a pair that still has an open batch; returns what it cleared.
+pub async fn clear_pending(
+    chain: &Chain,
+    secrets: &SealerSecrets,
+    pair_id: u32,
+    lookback: u64,
+) -> Result<Vec<Cleared>> {
+    let now = chain.current_epoch().await?.epoch;
+    let mut out = vec![];
+    for epoch in now.saturating_sub(lookback)..now {
+        if let Some(b) = chain.get_batch(epoch, pair_id).await? {
+            if !b.executed && b.entries > 0 {
+                out.push(clear_epoch(chain, secrets, pair_id, epoch).await?);
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug)]
@@ -183,6 +265,8 @@ pub enum ClaimOutcome {
         epoch: u64,
         blocks_left: u64,
     },
+    /// The epoch has ended but the sealer has not cleared the batch yet.
+    NotCleared { index: usize, epoch: u64 },
 }
 
 /// Claims every claimable swap, executing finished batches on the way.
@@ -207,19 +291,14 @@ pub async fn claim_all(
             });
             continue;
         }
-        let mut batch = chain.get_batch(entry.epoch, entry.pair_id).await?;
-        if !batch.as_ref().map(|b| b.executed).unwrap_or(false) {
-            let _ = ensure_ok(
-                chain
-                    .call(
-                        "end_epoch",
-                        json!({"epoch": entry.epoch, "pair_id": entry.pair_id}),
-                    )
-                    .await?,
-            )?;
-            batch = chain.get_batch(entry.epoch, entry.pair_id).await?;
-        }
-        let b = batch.ok_or_else(|| anyhow!("batch missing after execution"))?;
+        let batch = chain.get_batch(entry.epoch, entry.pair_id).await?;
+        let Some(b) = batch.filter(|b| b.executed) else {
+            outcomes.push(ClaimOutcome::NotCleared {
+                index: i,
+                epoch: entry.epoch,
+            });
+            continue;
+        };
         let pair = chain
             .get_pair(entry.pair_id)
             .await?

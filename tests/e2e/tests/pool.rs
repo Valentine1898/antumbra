@@ -19,12 +19,14 @@ use antumbra_core::{
     crypto::{self, EncryptionKey, NotePlaintext, Plaintext, SwapPlaintext},
     encoding::{fr_from_hex, fr_to_hex, negative_amount},
     note::{withdraw_ext_hash, Bsod, Note, SpendKey, SwapRecord, DIR_1_TO_2},
+    sealing::{self, SealerKey},
     tree, Fr,
 };
 use anyhow::{anyhow, Result};
 use ark_ff::{UniformRand, Zero};
 use ark_std::rand::{rngs::StdRng, SeedableRng};
 use base64::Engine;
+use ed25519_dalek::Signer;
 use near_workspaces::{
     network::Sandbox, result::ExecutionFinalResult, types::NearToken, Account, Contract, Worker,
 };
@@ -528,6 +530,17 @@ async fn swap_cycle() -> Result<()> {
         .json()?;
     assert_eq!(pair_id, 1);
 
+    // The sealer: the key swap amounts are encrypted to, and the executor key that signs cleared totals.
+    let sealer = SealerKey::from_seed(b"e2e sealer");
+    let executor = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+    let (spx, spy) = sealer.pk_xy();
+    pool.call("set_sealer")
+        .args_json(json!({"pk": [fr_to_hex(&spx), fr_to_hex(&spy)], "executor_pk": hex::encode(executor.verifying_key().to_bytes())}))
+        .max_gas()
+        .transact()
+        .await?
+        .into_result()?;
+
     // 1. Public liquidity: 1_000_000 of each asset.
     for ft in [ft1, ft2] {
         let r = transfer_call(
@@ -589,7 +602,16 @@ async fn swap_cycle() -> Result<()> {
         },
         InputWitness::dummy(1, random_fr()),
     ];
-    let circuit = SwapCircuit::new(tree::root_of(&leaves), 1, inputs, change, swap);
+    let circuit = SwapCircuit::new(
+        tree::root_of(&leaves),
+        1,
+        inputs,
+        change,
+        swap,
+        sealer.pk,
+        random_fr(),
+        sealing::scalar_from_seed(&rand::random()),
+    );
     let public = circuit.public.clone();
     let proof = keys::prove(&sw_pk, circuit, rand::random());
     let r = alice
@@ -606,7 +628,9 @@ async fn swap_cycle() -> Result<()> {
             "epoch": epoch,
             "pair_id": pair_id,
             "direction": DIR_1_TO_2,
-            "delta": "100000",
+            "delta_cm": fr_to_hex(&public.delta_cm),
+            "epk": [fr_to_hex(&public.epk.0), fr_to_hex(&public.epk.1)],
+            "ct": [fr_to_hex(&public.ct[0]), fr_to_hex(&public.ct[1])],
         }))
         .max_gas()
         .transact()
@@ -619,7 +643,9 @@ async fn swap_cycle() -> Result<()> {
         .args_json(json!({"epoch": epoch, "pair_id": pair_id}))
         .await?
         .json()?;
-    assert_eq!(batch["delta_1"], "100000");
+    // The chain holds one sealed entry and no amount: totals appear only when the sealer clears the epoch.
+    assert_eq!(batch["entries"], 1);
+    assert_eq!(batch["delta_1"], "0");
     assert_eq!(batch["executed"], false);
 
     // 3b. Attacks while the epoch is still open (bogus proofs: the contract rejects them before verification).
@@ -630,7 +656,8 @@ async fn swap_cycle() -> Result<()> {
             "proof": bogus_proof, "root": fr_to_hex(&tree::root_of(&leaves)), "asset_id": asset_id,
             "nullifiers": [bogus_nf, fr_to_hex(&random_fr())],
             "change_commitment": bogus_cm, "change_ciphertext": "", "swap_commitment": bogus_cm, "swap_ciphertext": "",
-            "epoch": epoch_arg, "pair_id": pair_id, "direction": DIR_1_TO_2, "delta": "1",
+            "epoch": epoch_arg, "pair_id": pair_id, "direction": DIR_1_TO_2,
+            "delta_cm": bogus_cm, "epk": [bogus_cm, bogus_cm], "ct": [bogus_cm, bogus_cm],
         })
     };
     // Selling asset 2 while claiming direction 1 (asset 1 is the sold side).
@@ -670,22 +697,77 @@ async fn swap_cycle() -> Result<()> {
         .transact()
         .await?;
     assert!(
-        r.is_failure() && failure_text(&r).contains("epoch not finished"),
+        r.is_failure() && failure_text(&r).contains("batch not cleared"),
         "{}",
         failure_text(&r)
     );
 
     // 4. The epoch ends; anyone executes the batch at one clearing price.
     chain.worker.fast_forward(EPOCH_BLOCKS + 1).await?;
+    // The sealer opens the batch, sums the amounts and signs the totals; the chain never saw 100_000.
+    let entries_json: Vec<antumbra_sealer::EntryJson> = pool
+        .view("get_batch_entries")
+        .args_json(json!({"epoch": epoch, "pair_id": pair_id, "from": 0, "limit": 64}))
+        .await?
+        .json()?;
+    let entries: Vec<_> = entries_json.iter().map(|e| e.to_entry().unwrap()).collect();
+    assert_eq!(entries.len(), 1);
+    let totals = antumbra_sealer::clear(&sealer, epoch, pair_id, &entries);
+    assert_eq!(
+        (totals.delta_1, totals.delta_2, totals.invalid.len()),
+        (100_000, 0, 0)
+    );
+    let msg = sealing::totals_message(
+        pool.id().as_str(),
+        epoch,
+        pair_id,
+        &totals.entries_hash,
+        totals.delta_1,
+        totals.delta_2,
+    );
+    let sig = executor.sign(&msg).to_bytes();
+    let clear_args = |d1: &str, d2: &str, sig: &[u8]| json!({"epoch": epoch, "pair_id": pair_id, "delta_1": d1, "delta_2": d2, "signature": b64(sig)});
+    // A signature by anyone else is refused.
+    let impostor = ed25519_dalek::SigningKey::from_bytes(&[6u8; 32]);
     let r = chain
         .bob
-        .call(pool.id(), "end_epoch")
-        .args_json(json!({"epoch": epoch, "pair_id": pair_id}))
+        .call(pool.id(), "end_epoch_signed")
+        .args_json(clear_args("100000", "0", &impostor.sign(&msg).to_bytes()))
         .max_gas()
         .transact()
         .await?;
-    gas("end_epoch", &r);
+    assert!(
+        r.is_failure() && failure_text(&r).contains("bad executor signature"),
+        "{}",
+        failure_text(&r)
+    );
+    // Wrong totals under the right key are refused too: the signature covers them.
+    let r = chain
+        .bob
+        .call(pool.id(), "end_epoch_signed")
+        .args_json(clear_args("1", "0", &sig))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(
+        r.is_failure() && failure_text(&r).contains("bad executor signature"),
+        "{}",
+        failure_text(&r)
+    );
+    let r = chain
+        .bob
+        .call(pool.id(), "end_epoch_signed")
+        .args_json(clear_args(
+            &totals.delta_1.to_string(),
+            &totals.delta_2.to_string(),
+            &sig,
+        ))
+        .max_gas()
+        .transact()
+        .await?;
+    gas("end_epoch_signed", &r);
     let batch: Value = r.into_result()?.json()?;
+    assert_eq!(batch["entries"], 1);
     let (expected_out, _, _) = amm::execute(1_000_000, 1_000_000, 100_000);
     assert_eq!(expected_out, 90_661);
     assert_eq!(batch["lambda_2"], expected_out.to_string());
@@ -788,6 +870,9 @@ async fn swap_cycle() -> Result<()> {
         late_inputs,
         late_change,
         late_swap,
+        sealer.pk,
+        random_fr(),
+        sealing::scalar_from_seed(&rand::random()),
     );
     let late_public = late.public.clone();
     let late_proof = keys::prove(&sw_pk, late, rand::random());
@@ -802,13 +887,16 @@ async fn swap_cycle() -> Result<()> {
             "change_ciphertext": b64(&wa.seal_note(&late_change)),
             "swap_commitment": fr_to_hex(&late_public.swap_commitment),
             "swap_ciphertext": b64(&wa.seal_swap(&late_swap)),
-            "epoch": epoch, "pair_id": pair_id, "direction": DIR_1_TO_2, "delta": "100000",
+            "epoch": epoch, "pair_id": pair_id, "direction": DIR_1_TO_2,
+            "delta_cm": fr_to_hex(&late_public.delta_cm),
+            "epk": [fr_to_hex(&late_public.epk.0), fr_to_hex(&late_public.epk.1)],
+            "ct": [fr_to_hex(&late_public.ct[0]), fr_to_hex(&late_public.ct[1])],
         }))
         .max_gas()
         .transact()
         .await?;
     assert!(
-        r.is_failure() && failure_text(&r).contains("batch already executed"),
+        r.is_failure() && failure_text(&r).contains("batch already cleared"),
         "{}",
         failure_text(&r)
     );

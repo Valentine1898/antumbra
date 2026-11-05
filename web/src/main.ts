@@ -4,7 +4,9 @@ import { Chain, loadDeployment, type Deployment, type EpochInfo, type PairInfo }
 import { DevKeySigner, WalletSigner, createDevAccount, type Signer, type TxResult } from './signer';
 import { getProvingKey, local, putProvingKey } from './storage';
 
-const RPC = new URLSearchParams(location.search).get('rpc') ?? 'https://test.rpc.fastnear.com';
+/// Public testnet RPCs, tried in order; `?rpc=<url>` puts your own first. Each one limits requests per IP.
+const rpcParam = new URLSearchParams(location.search).get('rpc');
+const RPC_URLS = [...(rpcParam ? [rpcParam] : []), 'https://test.rpc.fastnear.com', 'https://rpc.testnet.near.org', 'https://near-testnet.drpc.org'];
 const EXPLORER = 'https://testnet.nearblocks.io';
 const GAS_POOL = 200;
 const GAS_FT = 100;
@@ -19,6 +21,7 @@ let walletJson: string | null = local.get('wallet');
 let epochInfo: EpochInfo | null = null;
 let pair: PairInfo | null = null;
 let selectorBundle: Awaited<ReturnType<typeof WalletSigner.setup>> | null = null;
+let sealerShown = false;
 
 // ---------- mode ----------
 function setMode(mode: 'calm' | 'geek') {
@@ -241,7 +244,12 @@ async function refreshPool() {
     $('leaves').textContent = String(leaves);
     if (p) $('pair').textContent = `${assetName(p.asset_1)} ${Number(p.reserve_1).toLocaleString('en-US')} / ${assetName(p.asset_2)} ${Number(p.reserve_2).toLocaleString('en-US')}`;
     const batch = await chain.getBatch(e.epoch, deployment.pair_id);
-    $('batch').textContent = batch ? `epoch ${e.epoch}: delta_1 ${batch.delta_1}, delta_2 ${batch.delta_2}` : `epoch ${e.epoch}: empty so far`;
+    $('batch').textContent = batch ? `epoch ${e.epoch}: ${batch.entries} sealed swap${batch.entries === 1 ? '' : 's'}, amounts hidden until the sealer clears it` : `epoch ${e.epoch}: empty so far`;
+    if (!sealerShown) {
+      const sealer = await chain.getSealer();
+      $('sealer').textContent = sealer ? `${sealer.pk[0].slice(0, 10)}… (${sealer.outlayer ? 'OutLayer TEE' : 'signed executor'})` : 'none registered';
+      sealerShown = true;
+    }
     renderWallet();
   } catch (e) {
     console.error(e);
@@ -338,24 +346,29 @@ async function doSwap(btn: HTMLButtonElement) {
   const sell_asset = Number(($('swap-sell') as HTMLSelectElement).value);
   const amount = amountOf('swap-amount');
   const e = await chain.currentEpoch();
-  await proveAndSend(btn, 'swap', { pair_id: pair.pair_id, asset_1: pair.asset_1, asset_2: pair.asset_2, sell_asset, amount, epoch: e.epoch }, `swap of ${amount} ${assetName(sell_asset)} in epoch ${e.epoch}`);
+  const sealer = await chain.getSealer();
+  if (!sealer) return fail(new Error('the pool has no sealer registered yet'));
+  await proveAndSend(btn, 'swap', { pair_id: pair.pair_id, asset_1: pair.asset_1, asset_2: pair.asset_2, sell_asset, amount, epoch: e.epoch, pk_x: sealer.pk[0], pk_y: sealer.pk[1] }, `sealed swap of ${amount} ${assetName(sell_asset)} in epoch ${e.epoch}`);
 }
 
+/// Asks OutLayer to clear the last finished epoch inside a TEE (only when the pool is configured for it).
 async function doEndEpoch(btn: HTMLButtonElement) {
   await busy(btn, async () => {
     const s = requireSigner();
+    const sealer = await chain.getSealer();
+    if (!sealer?.outlayer) throw new Error('this pool clears epochs through its signed sealer; nothing to trigger from here');
     const e = (await chain.currentEpoch()).epoch - 1;
-    setToast('Executing the last epoch…', true);
-    const r = await s.call(deployment.pool, 'end_epoch', { epoch: e, pair_id: deployment.pair_id }, 50, '0');
+    setToast('Asking the TEE to clear the last epoch…', true);
+    const r = await s.call(deployment.pool, 'end_epoch', { epoch: e, pair_id: deployment.pair_id }, 150, '100000000000000000000000');
     if (r === 'redirect') return;
-    reportTx(`epoch ${e} executed`, r);
+    reportTx(`epoch ${e} sent to the sealer`, r);
     await refreshPool();
   });
 }
 
 async function doClaim(btn: HTMLButtonElement) {
   await busy(btn, async () => {
-    const s = requireSigner();
+    requireSigner();
     await sync(false);
     const summary = JSON.parse(wasm.wallet_summary(walletJson!));
     const now = await chain.currentEpoch();
@@ -365,14 +378,10 @@ async function doClaim(btn: HTMLButtonElement) {
     for (const sw of summary.swaps) {
       if (sw.claimed) continue;
       if (sw.epoch >= now.epoch) { log(`swap #${sw.index} clears when epoch ${sw.epoch} ends (${now.blocks_left} blocks to go)`); continue; }
-      let batch = await chain.getBatch(sw.epoch, sw.pair_id);
+      const batch = await chain.getBatch(sw.epoch, sw.pair_id);
       if (!batch || !batch.executed) {
-        setToast('Executing the batch for everyone…', true);
-        const r = await s.call(deployment.pool, 'end_epoch', { epoch: sw.epoch, pair_id: sw.pair_id }, 50, '0');
-        if (r === 'redirect') return;
-        reportTx(`epoch ${sw.epoch} executed`, r);
-        batch = await chain.getBatch(sw.epoch, sw.pair_id);
-        if (!batch?.executed) throw new Error('batch still not executed');
+        log(`swap #${sw.index}: epoch ${sw.epoch} has ended, waiting for the sealer to clear it (only the sealer can open the amounts)`);
+        continue;
       }
       setToast('Proving your share in your browser…', true);
       const { result, ms } = await prepare('claim', { index: sw.index, asset_1: p.asset_1, asset_2: p.asset_2, batch: JSON.stringify(batch) });
@@ -414,7 +423,7 @@ async function setupSigner() {
   const saved = local.get('signer');
   if (saved) {
     const cfg = JSON.parse(saved);
-    if (cfg.kind === 'devkey') signer = new DevKeySigner(cfg.account, cfg.key, RPC);
+    if (cfg.kind === 'devkey') signer = new DevKeySigner(cfg.account, cfg.key, RPC_URLS);
   }
   try {
     selectorBundle = await WalletSigner.setup(deployment.pool);
@@ -460,7 +469,7 @@ async function main() {
 
   await init();
   deployment = await loadDeployment();
-  chain = new Chain(RPC, deployment.pool);
+  chain = new Chain(RPC_URLS, deployment.pool);
   ($('pool-link') as HTMLAnchorElement).href = `${EXPLORER}/address/${deployment.pool}`;
   $('pool-id').textContent = deployment.pool;
   ensureWallet();
@@ -517,7 +526,7 @@ async function main() {
     const account = ($('dev-account') as HTMLInputElement).value.trim();
     const key = ($('dev-key') as HTMLInputElement).value.trim();
     if (!account || !key) return fail(new Error('account id and secret key are required'));
-    signer = new DevKeySigner(account, key, RPC);
+    signer = new DevKeySigner(account, key, RPC_URLS);
     local.set('signer', JSON.stringify({ kind: 'devkey', account, key }));
     showSigner();
     dialog.close();
@@ -528,7 +537,7 @@ async function main() {
     await busy(btn, async () => {
       btn.querySelector('strong')!.textContent = 'Creating…';
       const { accountId, secretKey } = await createDevAccount();
-      signer = new DevKeySigner(accountId, secretKey, RPC);
+      signer = new DevKeySigner(accountId, secretKey, RPC_URLS);
       local.set('signer', JSON.stringify({ kind: 'devkey', account: accountId, key: secretKey }));
       showSigner();
       dialog.close();
@@ -549,7 +558,7 @@ async function main() {
   await handleRedirectReturn();
   await sync(false);
   if (!signer) setTimeout(() => dialog.showModal(), 600);
-  setInterval(refreshPool, 6000);
+  setInterval(refreshPool, 12000);
   void ensureKeys().catch(fail);
 }
 

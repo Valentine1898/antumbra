@@ -18,7 +18,7 @@ use crate::{
 pub type Keys = (ProvingKey<Bls12_381>, VerifyingKey<Bls12_381>);
 
 pub const JOINSPLIT_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-joinsplit-v01";
-pub const SWAP_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-swap-v0000001";
+pub const SWAP_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-swap-v0000002";
 pub const SWAPCLAIM_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-swapclaim-v01";
 
 fn setup<C: ConstraintSynthesizer<Fr>>(blank: C, seed: [u8; 32]) -> Keys {

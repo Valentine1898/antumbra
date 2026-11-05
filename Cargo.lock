@@ -122,6 +122,7 @@ dependencies = [
  "ark-bls12-381",
  "ark-crypto-primitives",
  "ark-ec",
+ "ark-ed-on-bls12-381",
  "ark-ff",
  "ark-groth16",
  "ark-r1cs-std",
@@ -141,7 +142,10 @@ dependencies = [
  "antumbra-wallet",
  "anyhow",
  "clap",
+ "ed25519-dalek",
+ "hex",
  "near-workspaces",
+ "rand 0.9.5",
  "serde",
  "serde_json",
  "tokio",
@@ -153,6 +157,8 @@ version = "0.1.0"
 dependencies = [
  "ark-bls12-381",
  "ark-crypto-primitives",
+ "ark-ec",
+ "ark-ed-on-bls12-381",
  "ark-ff",
  "ark-r1cs-std",
  "ark-relations",
@@ -173,10 +179,12 @@ version = "0.1.0"
 dependencies = [
  "antumbra-circuits",
  "antumbra-core",
+ "antumbra-sealer",
  "anyhow",
  "ark-ff",
  "ark-std",
  "base64 0.22.1",
+ "ed25519-dalek",
  "hex",
  "near-workspaces",
  "rand 0.9.5",
@@ -195,16 +203,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "antumbra-sealer"
+version = "0.1.0"
+dependencies = [
+ "antumbra-core",
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "antumbra-wallet"
 version = "0.1.0"
 dependencies = [
  "antumbra-circuits",
  "antumbra-core",
+ "antumbra-sealer",
  "anyhow",
  "ark-ff",
  "ark-serialize",
  "ark-std",
  "base64 0.22.1",
+ "ed25519-dalek",
  "hex",
  "near-workspaces",
  "rand 0.9.5",
@@ -332,6 +353,19 @@ dependencies = [
  "num-traits",
  "rayon",
  "zeroize",
+]
+
+[[package]]
+name = "ark-ed-on-bls12-381"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224468fbacac532a5498a9f30a80d42e499514cf5e17296342380e6a45296029"
+dependencies = [
+ "ark-bls12-381",
+ "ark-ec",
+ "ark-ff",
+ "ark-r1cs-std",
+ "ark-std",
 ]
 
 [[package]]
@@ -1385,6 +1419,7 @@ version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
+ "pkcs8",
  "signature",
 ]
 
@@ -1397,8 +1432,10 @@ dependencies = [
  "curve25519-dalek",
  "ed25519",
  "rand_core 0.6.4",
+ "serde",
  "sha2 0.10.9",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]

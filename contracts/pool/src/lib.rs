@@ -13,6 +13,7 @@ use antumbra_core::{
     encoding::{bytes32_from_hex, fr_from_bytes, fr_to_bytes, negative_amount, string_to_fr},
     note::{Bsod, DIR_1_TO_2, DIR_2_TO_1, DOM_EXT},
     poseidon,
+    sealing::{self, entries_hash, totals_message, SealedEntry},
     tree::Frontier,
     Fr,
 };
@@ -22,7 +23,7 @@ use near_sdk::{
     json_types::{Base64VecU8, U128},
     near, require,
     store::{LookupMap, LookupSet, Vector},
-    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, PromiseOrValue,
+    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue,
 };
 
 /// Verifying keys, NEP-488 layout, produced by `antumbra-setup`.
@@ -34,6 +35,10 @@ const SWAPCLAIM_VK: &[u8] = include_bytes!("../../../keys/swapclaim.vk.near");
 pub const EPOCH_BLOCKS: u64 = 20;
 /// Amounts are limited to 112 bits (the circuits' range checks).
 pub const MAX_AMOUNT: u128 = (1u128 << 112) - 1;
+/// Sealed swaps per batch; keeps the sealer's input small.
+pub const MAX_BATCH_ENTRIES: usize = 512;
+const GAS_OUTLAYER_REQUEST: Gas = Gas::from_tgas(100);
+const GAS_OUTLAYER_CALLBACK: Gas = Gas::from_tgas(30);
 
 const GAS_FT_TRANSFER: Gas = Gas::from_tgas(10);
 
@@ -70,10 +75,46 @@ pub struct Pair {
 
 #[near(serializers = [borsh])]
 pub struct Batch {
+    /// Totals, known only once the sealer has cleared the batch.
     pub delta_1: u128,
     pub delta_2: u128,
     pub bsod: Option<Bsod>,
     pub bsod_hash: Option<[u8; 32]>,
+    /// The sealed swaps of this batch, in order.
+    pub entries: Vec<SealedEntry>,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone)]
+pub struct OutLayerConfig {
+    pub account: AccountId,
+    pub wasm_url: String,
+    pub wasm_hash: String,
+    pub secrets_profile: Option<String>,
+}
+
+#[near(serializers = [borsh])]
+pub struct SealerConfig {
+    pub pk_x: [u8; 32],
+    pub pk_y: [u8; 32],
+    /// ed25519 key of the signed executor path.
+    pub executor_pk: [u8; 32],
+    pub outlayer: Option<OutLayerConfig>,
+}
+
+#[near(serializers = [json])]
+pub struct SealerView {
+    pub pk: [String; 2],
+    pub executor_pk: String,
+    pub outlayer: Option<OutLayerConfig>,
+}
+
+#[near(serializers = [json])]
+pub struct EntryView {
+    pub direction: u8,
+    pub delta_cm: String,
+    pub epk: [String; 2],
+    pub ct: [String; 2],
 }
 
 #[near(serializers = [json])]
@@ -104,6 +145,8 @@ pub struct BatchView {
     pub unfilled_1: U128,
     pub unfilled_2: U128,
     pub bsod_hash: Option<String>,
+    pub entries: u32,
+    pub entries_hash: String,
 }
 
 #[near(serializers = [json])]
@@ -133,6 +176,17 @@ pub struct Pool {
     leaves: Vector<Leaf>,
     pairs: Vector<Pair>,
     batches: LookupMap<u64, Batch>,
+    sealer: Option<SealerConfig>,
+}
+
+fn new_batch() -> Batch {
+    Batch {
+        delta_1: 0,
+        delta_2: 0,
+        bsod: None,
+        bsod_hash: None,
+        entries: vec![],
+    }
 }
 
 fn batch_key(epoch: u64, pair_id: u32) -> u64 {
@@ -157,6 +211,7 @@ impl Pool {
             leaves: Vector::new(StorageKey::Leaves),
             pairs: Vector::new(StorageKey::Pairs),
             batches: LookupMap::new(StorageKey::Batches),
+            sealer: None,
         }
     }
 
@@ -187,6 +242,34 @@ impl Pool {
             reserve_2: 0,
         });
         self.pairs.len()
+    }
+
+    /// Registers the sealer: its Jubjub public key (what swaps encrypt to), the
+    /// ed25519 key of the signed executor, and optionally the OutLayer program
+    /// that runs the same sealer inside a TEE.
+    pub fn set_sealer(
+        &mut self,
+        pk: Vec<String>,
+        executor_pk: String,
+        outlayer: Option<OutLayerConfig>,
+    ) {
+        require!(env::predecessor_account_id() == self.owner, "owner only");
+        require!(pk.len() == 2, "pk must be [x, y]");
+        let (x, y) = (
+            parse_fr(&pk[0], "sealer pk.x"),
+            parse_fr(&pk[1], "sealer pk.y"),
+        );
+        require!(
+            sealing::point_from_xy(x, y).is_some(),
+            "sealer pk is not a valid Jubjub point"
+        );
+        let executor_pk = parse_bytes32(&executor_pk, "executor pk");
+        self.sealer = Some(SealerConfig {
+            pk_x: fr_to_bytes(&x),
+            pk_y: fr_to_bytes(&y),
+            executor_pk,
+            outlayer,
+        });
     }
 
     // ----- deposits -----
@@ -327,11 +410,12 @@ impl Pool {
         }
     }
 
-    /// Shielded swap: burns `delta` of `asset_id` (one side of `pair_id`)
-    /// into the batch of `epoch`, keeps the change private, and inserts the
-    /// swap commitment so it can be claimed once the batch executes. Any
-    /// epoch up to the current one is accepted as long as its batch has not
-    /// been executed yet, so a swap that lands one epoch late still clears.
+    /// Shielded swap with a sealed amount: burns a private `delta` of
+    /// `asset_id` (one side of `pair_id`) into the batch of `epoch`, keeps the
+    /// change private, inserts the swap commitment, and stores the ciphertext
+    /// that only the sealer can open. The proof guarantees the ciphertext opens
+    /// to the committed amount. Any epoch up to the current one is accepted as
+    /// long as its batch has not been cleared yet.
     #[allow(clippy::too_many_arguments)]
     pub fn swap(
         &mut self,
@@ -346,9 +430,18 @@ impl Pool {
         epoch: u64,
         pair_id: u32,
         direction: u8,
-        delta: U128,
+        delta_cm: String,
+        epk: Vec<String>,
+        ct: Vec<String>,
     ) -> bool {
-        require!(nullifiers.len() == 2, "need 2 nullifiers");
+        let sealer = self
+            .sealer
+            .as_ref()
+            .unwrap_or_else(|| env::panic_str("no sealer registered"));
+        require!(
+            nullifiers.len() == 2 && epk.len() == 2 && ct.len() == 2,
+            "need 2 nullifiers, epk [x, y], ct [c0, c1]"
+        );
         require!(
             epoch <= self.current_epoch_inner(),
             "swap must not target a future epoch"
@@ -357,7 +450,6 @@ impl Pool {
             direction == DIR_1_TO_2 || direction == DIR_2_TO_1,
             "direction must be 1 or 2"
         );
-        require!(delta.0 > 0 && delta.0 <= MAX_AMOUNT, "delta out of range");
         let pair = self.pair(pair_id);
         let burned = if direction == DIR_1_TO_2 {
             pair.asset_1
@@ -372,6 +464,9 @@ impl Pool {
         let nf = self.require_fresh_nullifiers(&nullifiers);
         let cm_change = parse_fr(&change_commitment, "change commitment");
         let scm = parse_fr(&swap_commitment, "swap commitment");
+        let delta_cm_fr = parse_fr(&delta_cm, "delta commitment");
+        let (epk_x, epk_y) = (parse_fr(&epk[0], "epk.x"), parse_fr(&epk[1], "epk.y"));
+        let (ct0, ct1) = (parse_fr(&ct[0], "ct[0]"), parse_fr(&ct[1], "ct[1]"));
 
         let inputs = [
             root_bytes,
@@ -383,7 +478,13 @@ impl Pool {
             fr_to_bytes(&Fr::from(epoch)),
             fr_to_bytes(&Fr::from(pair_id as u64)),
             fr_to_bytes(&Fr::from(direction as u64)),
-            fr_to_bytes(&Fr::from(delta.0)),
+            fr_to_bytes(&delta_cm_fr),
+            fr_to_bytes(&epk_x),
+            fr_to_bytes(&epk_y),
+            fr_to_bytes(&ct0),
+            fr_to_bytes(&ct1),
+            sealer.pk_x,
+            sealer.pk_y,
         ];
         verify_or_panic(SWAP_VK, &proof.0, &inputs);
 
@@ -393,30 +494,170 @@ impl Pool {
         let p0 = self.insert_leaf(cm_change, change_ciphertext.0);
         let p1 = self.insert_leaf(scm, swap_ciphertext.0);
         let key = batch_key(epoch, pair_id);
-        let batch = self.batches.entry(key).or_insert_with(|| Batch {
-            delta_1: 0,
-            delta_2: 0,
-            bsod: None,
-            bsod_hash: None,
+        let batch = self.batches.entry(key).or_insert_with(new_batch);
+        require!(batch.bsod.is_none(), "batch already cleared");
+        require!(
+            batch.entries.len() < MAX_BATCH_ENTRIES,
+            "batch is full for this epoch"
+        );
+        batch.entries.push(SealedEntry {
+            direction,
+            delta_cm: fr_to_bytes(&delta_cm_fr),
+            epk_x: fr_to_bytes(&epk_x),
+            epk_y: fr_to_bytes(&epk_y),
+            ct0: fr_to_bytes(&ct0),
+            ct1: fr_to_bytes(&ct1),
         });
-        require!(batch.bsod.is_none(), "batch already executed");
-        if direction == DIR_1_TO_2 {
-            batch.delta_1 += delta.0;
-        } else {
-            batch.delta_2 += delta.0;
-        }
         env::log_str(&format!(
-            "swap: epoch={epoch} pair={pair_id} direction={direction} delta={} positions={p0},{p1}",
-            delta.0
+            "swap: epoch={epoch} pair={pair_id} direction={direction} sealed positions={p0},{p1}"
         ));
         true
     }
 
-    /// Executes a finished epoch's batch for one pair against the pool.
-    /// Permissionless; a no-op batch (no swaps) still gets a result so
-    /// nothing is left pending.
-    pub fn end_epoch(&mut self, epoch: u64, pair_id: u32) -> BatchView {
-        self.execute_batch(epoch, pair_id);
+    /// Clears a finished epoch with totals signed by the registered executor
+    /// (the sealer run outside OutLayer). The signature covers the exact set of
+    /// sealed entries, so the totals cannot be replayed against another batch.
+    pub fn end_epoch_signed(
+        &mut self,
+        epoch: u64,
+        pair_id: u32,
+        delta_1: U128,
+        delta_2: U128,
+        signature: Base64VecU8,
+    ) -> BatchView {
+        let sealer = self
+            .sealer
+            .as_ref()
+            .unwrap_or_else(|| env::panic_str("no sealer registered"));
+        let sig: [u8; 64] = signature
+            .0
+            .as_slice()
+            .try_into()
+            .unwrap_or_else(|_| env::panic_str("signature must be 64 bytes"));
+        let entries = self
+            .batches
+            .get(&batch_key(epoch, pair_id))
+            .map(|b| b.entries.clone())
+            .unwrap_or_default();
+        let msg = totals_message(
+            env::current_account_id().as_str(),
+            epoch,
+            pair_id,
+            &entries_hash(&entries),
+            delta_1.0,
+            delta_2.0,
+        );
+        require!(
+            env::ed25519_verify(&sig, msg, &sealer.executor_pk),
+            "bad executor signature"
+        );
+        self.execute_totals(epoch, pair_id, delta_1.0, delta_2.0);
+        self.get_batch(epoch, pair_id).expect("batch")
+    }
+
+    /// Clears a finished epoch through OutLayer: asks the TEE to run the
+    /// sealer program on this batch; `on_sealed_result` executes the totals.
+    /// The attached deposit pays for the execution (unused part is refunded by
+    /// OutLayer).
+    #[payable]
+    pub fn end_epoch(&mut self, epoch: u64, pair_id: u32) -> Promise {
+        let sealer = self
+            .sealer
+            .as_ref()
+            .unwrap_or_else(|| env::panic_str("no sealer registered"));
+        let ol = sealer.outlayer.as_ref().unwrap_or_else(|| {
+            env::panic_str("no OutLayer program configured; use end_epoch_signed")
+        });
+        require!(epoch < self.current_epoch_inner(), "epoch not finished");
+        let batch = self
+            .batches
+            .get(&batch_key(epoch, pair_id))
+            .unwrap_or_else(|| env::panic_str("no batch for this epoch"));
+        require!(batch.bsod.is_none(), "batch already cleared");
+        let entries: Vec<String> = batch
+            .entries
+            .iter()
+            .map(|e| {
+                format!(
+                    r#"{{"direction":{},"delta_cm":"{}","epk":["{}","{}"],"ct":["{}","{}"]}}"#,
+                    e.direction,
+                    hex::encode(e.delta_cm),
+                    hex::encode(e.epk_x),
+                    hex::encode(e.epk_y),
+                    hex::encode(e.ct0),
+                    hex::encode(e.ct1)
+                )
+            })
+            .collect();
+        let input = format!(
+            r#"{{"op":"clear","pool":"{}","epoch":{epoch},"pair_id":{pair_id},"entries":[{}]}}"#,
+            env::current_account_id(),
+            entries.join(",")
+        );
+        let mut args = near_sdk::serde_json::json!({
+            "source": {"WasmUrl": {"url": ol.wasm_url, "hash": ol.wasm_hash, "build_target": "wasm32-wasip1"}},
+            "resource_limits": {},
+            "input_data": input,
+            "response_format": "Text",
+        });
+        if let Some(profile) = &ol.secrets_profile {
+            args["secrets_ref"] =
+                near_sdk::serde_json::json!({"profile": profile, "account_id": self.owner});
+        }
+        Promise::new(ol.account.clone())
+            .function_call(
+                "request_execution".to_string(),
+                args.to_string().into_bytes(),
+                env::attached_deposit(),
+                GAS_OUTLAYER_REQUEST,
+            )
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(GAS_OUTLAYER_CALLBACK)
+                    .on_sealed_result(epoch, pair_id),
+            )
+    }
+
+    /// OutLayer callback: the sealer's output for one batch.
+    #[private]
+    pub fn on_sealed_result(&mut self, epoch: u64, pair_id: u32) -> BatchView {
+        let raw = env::promise_result_checked(0, 4096)
+            .unwrap_or_else(|_| env::panic_str("sealer execution failed"));
+        let mut value: near_sdk::serde_json::Value = near_sdk::serde_json::from_slice(&raw)
+            .unwrap_or_else(|_| env::panic_str("sealer output is not JSON"));
+        if let Some(inner) = value.as_str() {
+            value = near_sdk::serde_json::from_str(inner)
+                .unwrap_or_else(|_| env::panic_str("sealer output is not JSON"));
+        }
+        require!(
+            value["ok"].as_bool() == Some(true),
+            "sealer reported an error"
+        );
+        require!(
+            value["invalid"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
+            "sealer found inconsistent entries"
+        );
+        let entries = self
+            .batches
+            .get(&batch_key(epoch, pair_id))
+            .map(|b| b.entries.clone())
+            .unwrap_or_default();
+        require!(
+            value["entries_hash"].as_str() == Some(hex::encode(entries_hash(&entries)).as_str()),
+            "sealer output is for another batch"
+        );
+        let d1: u128 = value["delta_1"]
+            .as_str()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| env::panic_str("delta_1"));
+        let d2: u128 = value["delta_2"]
+            .as_str()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| env::panic_str("delta_2"));
+        self.execute_totals(epoch, pair_id, d1, d2);
         self.get_batch(epoch, pair_id).expect("batch")
     }
 
@@ -443,19 +684,13 @@ impl Pool {
             parse_fr(&commitments[0], "commitment"),
             parse_fr(&commitments[1], "commitment"),
         ];
-        if self
-            .batches
-            .get(&batch_key(epoch, pair_id))
-            .and_then(|b| b.bsod_hash)
-            .is_none()
-        {
-            self.execute_batch(epoch, pair_id);
-        }
         let bsod_hash = self
             .batches
             .get(&batch_key(epoch, pair_id))
             .and_then(|b| b.bsod_hash)
-            .expect("batch executed");
+            .unwrap_or_else(|| {
+                env::panic_str("batch not cleared yet; the sealer has to clear this epoch first")
+            });
 
         let inputs = [
             root_bytes,
@@ -570,7 +805,41 @@ impl Pool {
                 unfilled_1: U128(d.unfilled_1),
                 unfilled_2: U128(d.unfilled_2),
                 bsod_hash: b.bsod_hash.map(hex::encode),
+                entries: b.entries.len() as u32,
+                entries_hash: hex::encode(entries_hash(&b.entries)),
             }
+        })
+    }
+
+    /// The sealed entries of a batch, for the sealer.
+    pub fn get_batch_entries(
+        &self,
+        epoch: u64,
+        pair_id: u32,
+        from: u32,
+        limit: u32,
+    ) -> Vec<EntryView> {
+        let Some(b) = self.batches.get(&batch_key(epoch, pair_id)) else {
+            return vec![];
+        };
+        b.entries
+            .iter()
+            .skip(from as usize)
+            .take(limit as usize)
+            .map(|e| EntryView {
+                direction: e.direction,
+                delta_cm: hex::encode(e.delta_cm),
+                epk: [hex::encode(e.epk_x), hex::encode(e.epk_y)],
+                ct: [hex::encode(e.ct0), hex::encode(e.ct1)],
+            })
+            .collect()
+    }
+
+    pub fn get_sealer(&self) -> Option<SealerView> {
+        self.sealer.as_ref().map(|c| SealerView {
+            pk: [hex::encode(c.pk_x), hex::encode(c.pk_y)],
+            executor_pk: hex::encode(c.executor_pk),
+            outlayer: c.outlayer.clone(),
         })
     }
 
@@ -627,7 +896,8 @@ impl Pool {
         nf
     }
 
-    fn execute_batch(&mut self, epoch: u64, pair_id: u32) {
+    /// Executes a batch against the pool with the totals the sealer published.
+    fn execute_totals(&mut self, epoch: u64, pair_id: u32, delta_1: u128, delta_2: u128) {
         require!(epoch < self.current_epoch_inner(), "epoch not finished");
         let key = batch_key(epoch, pair_id);
         let pair_idx = pair_id.checked_sub(1).unwrap_or(u32::MAX);
@@ -638,14 +908,12 @@ impl Pool {
                 .unwrap_or_else(|| env::panic_str("unknown pair"));
             (p.asset_1, p.asset_2)
         };
-        let batch = self.batches.entry(key).or_insert_with(|| Batch {
-            delta_1: 0,
-            delta_2: 0,
-            bsod: None,
-            bsod_hash: None,
-        });
-        require!(batch.bsod.is_none(), "batch already executed");
-        let (delta_1, delta_2) = (batch.delta_1, batch.delta_2);
+        let batch = self.batches.entry(key).or_insert_with(new_batch);
+        require!(batch.bsod.is_none(), "batch already cleared");
+        require!(
+            delta_1 <= MAX_AMOUNT && delta_2 <= MAX_AMOUNT,
+            "totals out of range"
+        );
 
         let pair = self.pairs.get_mut(pair_idx).expect("pair");
         // Direction 1 first (asset_1 -> asset_2), then direction 2 against the updated reserves.
@@ -676,10 +944,13 @@ impl Pool {
         };
         let hash = fr_to_bytes(&bsod.hash());
         let batch = self.batches.get_mut(&key).expect("batch");
+        batch.delta_1 = delta_1;
+        batch.delta_2 = delta_2;
         batch.bsod = Some(bsod);
         batch.bsod_hash = Some(hash);
         env::log_str(&format!(
-            "end_epoch: epoch={epoch} pair={pair_id} delta_1={delta_1} delta_2={delta_2} lambda_1={lambda_1} lambda_2={lambda_2} unfilled_1={unfilled_1} unfilled_2={unfilled_2}"
+            "end_epoch: epoch={epoch} pair={pair_id} entries={} delta_1={delta_1} delta_2={delta_2} lambda_1={lambda_1} lambda_2={lambda_2} unfilled_1={unfilled_1} unfilled_2={unfilled_2}",
+            batch.entries.len()
         ));
     }
 

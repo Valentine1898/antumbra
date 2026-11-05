@@ -1,9 +1,9 @@
 {
   "network": "testnet",
-  "pool": "dev-20261105111749-36839728919748.testnet",
+  "pool": "pool-1ba5bb.dev-20261105111746-77978043288771.testnet",
   "tokens": [
-    "dev-20261105111901-60894369203187.testnet",
-    "dev-20261105111922-78535276543876.testnet"
+    "ft1-1ba5bb.dev-20261105111746-77978043288771.testnet",
+    "ft2-1ba5bb.dev-20261105111746-77978043288771.testnet"
   ],
   "pair_id": 1,
   "deployer": "dev-20261105111746-77978043288771.testnet"

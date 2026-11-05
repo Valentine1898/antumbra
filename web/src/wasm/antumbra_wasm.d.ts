@@ -13,7 +13,7 @@ export class Prover {
     /**
      * Prepared `swap` call. `epoch` is the contract's current epoch.
      */
-    prepare_swap(wallet_json: string, pair_id: number, asset_1: number, asset_2: number, sell_asset: number, amount_str: string, epoch: number, seed_bytes: Uint8Array | number[]): string;
+    prepare_swap(wallet_json: string, pair_id: number, asset_1: number, asset_2: number, sell_asset: number, amount_str: string, epoch: number, pk_x: string, pk_y: string, seed_bytes: Uint8Array | number[]): string;
     /**
      * Prepared `joinsplit` call for a private transfer.
      */
@@ -81,7 +81,7 @@ export interface InitOutput {
     readonly prepare_deposit: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly prover_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly prover_prepare_claim: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
-    readonly prover_prepare_swap: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => void;
+    readonly prover_prepare_swap: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => void;
     readonly prover_prepare_transfer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly prover_prepare_withdraw: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly scan: (a: number, b: number, c: number, d: number, e: number) => void;

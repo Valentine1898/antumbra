@@ -18,6 +18,7 @@ Tracks: `privacy`, `defi`, `open`.
 | 4 | `antumbra` CLI wallet (keys, scanning, deposit, transfer, withdraw, swap, claim) with a one-command deployer; the whole flow runs on NEAR testnet (see below) |
 | 5 | Attack cases in the sandbox tests, `scripts/check.sh`, demo script |
 | 6 | Browser wallet (`web/`): proving in WebAssembly inside a Web Worker (about 3 s per proof), notes scanned and kept in the browser, signing through a NEAR wallet or a throwaway funded testnet account created in-page |
+| 7 | Sealed amounts: the swap circuit proves a verifiable encryption of the amount to the sealer's key, the chain stores only a commitment and a ciphertext, and a sealer (signed executor, or the same program inside OutLayer's TEE) clears each epoch with batch totals |
 
 Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -32,6 +33,7 @@ Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 | `crates/antumbra-wallet` | Wallet library: local state, chain client, proving-key cache, the user-level operations |
 | `crates/antumbra-cli` | The `antumbra` command-line wallet and deployer |
 | `crates/antumbra-wasm` | wasm-bindgen bindings of the wallet for the browser |
+| `crates/antumbra-sealer` | The sealer: opens sealed amounts and sums a batch; a library plus a WASI program for OutLayer |
 | `web` | The browser wallet (Vite + TypeScript, near-api-js, wallet-selector) |
 | `tests/e2e` | Sandbox tests: the transfer cycle (deposit, private transfer, scan, withdraw, two rejected attacks) and the swap cycle (liquidity, swap, epoch execution, claim, withdrawal of the bought asset) |
 | `scripts/demo.sh` | Runs the whole flow through the CLI against a deployment |
@@ -66,15 +68,17 @@ the sandbox download) and about two minutes after that.
    with `note already spent`; a withdrawal proof bound to Bob cannot pay Alice
    (`invalid proof`). Expect `all checks passed`.
    `swap_cycle`: Alice seeds a pool with 1 000 000 of each asset, deposits
-   600 000 of asset 1, swaps 100 000 of it in the current epoch (change stays
-   private), the epoch ends and anyone executes the batch (`lambda_2 = 90661`,
+   600 000 of asset 1, swaps 100 000 of it in the current epoch with the
+   amount sealed (the batch shows one entry and no amount), the epoch ends,
+   the sealer opens the batch and submits signed totals (`lambda_2 = 90661`,
    the constant-product output after the 0.3% fee), Alice finds her swap by
    scanning, claims 90 661 of asset 2 as a private note, and withdraws it to
    her account. Along the way the contract rejects a swap that sells the wrong
-   side of the pair, a swap aimed at a future epoch, a claim before the epoch
-   has ended, a replayed claim (`note already spent`) and a valid swap aimed
-   at an already executed batch (`batch already executed`, with the call
-   reverted entirely). Expect `swap cycle passed` and `test result: ok` for both.
+   side of the pair, a swap aimed at a future epoch, a claim before the batch
+   is cleared, totals signed by an impostor, wrong totals under the right key,
+   a replayed claim (`note already spent`) and a valid swap aimed at an
+   already cleared batch (`batch already cleared`, with the call reverted
+   entirely). Expect `swap cycle passed` and `test result: ok` for both.
 
 The `spike` crates are independent: see [spike results](#spike-results-day-1).
 
@@ -88,7 +92,9 @@ cd web && npm install && npm run dev
 ```
 
 Open http://localhost:5173. Either way the page talks to the testnet
-deployment in `deployment.json` through FastNEAR's public RPC.
+deployment in `deployment.json` through public RPC endpoints (FastNEAR first,
+then two others; each limits requests per IP, so the page fails over). Add
+`?rpc=https://…` to the URL to put your own endpoint first.
 
 1. **Gas payer.** Connect MyNearWallet, or expand "testnet dev key" and press
    *Create a funded dev account*: a key pair is generated in the browser and
@@ -101,9 +107,12 @@ deployment in `deployment.json` through FastNEAR's public RPC.
    works as a demo). The proof is built in a Web Worker in about three
    seconds; the log shows the two nullifiers and two commitments the chain saw.
 4. **Withdraw** 100 000 to any NEAR account; **Swap** 100 000 of asset 1 in
-   the current epoch; once the epoch (20 blocks) has ended, **Claim** executes
-   the batch if nobody has, proves your share and mints it as a private note.
-   *Sync* again and the asset-2 balance shows up; withdraw it if you like.
+   the current epoch: the amount goes on-chain sealed (Geek mode shows the
+   batch with one entry and no amount). Once the epoch (20 blocks) has ended
+   and the pool's sealer has cleared it (the hosted pool's sealer runs as
+   `antumbra sealer watch`; on your own deployment run it yourself), **Claim**
+   proves your share and mints it as a private note. *Sync* again and the
+   asset-2 balance shows up; withdraw it if you like.
 
 Proving keys are regenerated from the seeded setups on first use (about half
 a minute per circuit, once) and cached in IndexedDB. The wallet (keys and
@@ -135,11 +144,22 @@ antumbra --wallet alice.json keys-new  # prints a shielded address antumbra:<pk>
 antumbra --wallet alice.json deposit --token <token id> --amount 600000
 antumbra --wallet alice.json sync
 antumbra --wallet alice.json transfer --asset 1 --amount 250000 --to antumbra:...
-antumbra --wallet alice.json swap --pair 1 --sell 1 --amount 100000
-antumbra --wallet alice.json claim    # once the epoch (20 blocks) has ended; executes the batch if needed
+antumbra --wallet alice.json swap --pair 1 --sell 1 --amount 100000   # amount sealed to the pool's sealer
+antumbra sealer clear --pair 1        # the pool operator opens finished epochs and submits signed totals
+antumbra --wallet alice.json claim    # once the epoch is cleared
 antumbra --wallet alice.json withdraw --asset 2 --amount 90661 --to <near account>
 antumbra info
 ```
+
+`antumbra sealer watch --pair 1` keeps clearing epochs as they end; `deploy`
+generates the sealer keys and registers them. To clear epochs inside a TEE
+instead, build the sealer program (`cargo build -p antumbra-sealer --target
+wasm32-wasip1 --release`), publish it at an https URL, give the program a
+`PROTECTED_SEALER_SEED` secret in OutLayer, register the same public key
+plus `--outlayer-account outlayer.testnet --wasm-url … --wasm-hash …` with
+`antumbra sealer register`, and `end_epoch` (with a deposit for the
+execution fee) asks the enclave to clear the batch. This path is wired in the
+contract but was not exercised end to end during the hackathon.
 
 `deploy` also works against a local sandbox: pass `--network http://127.0.0.1:3030
 --account test.near --key <validator key>` and the contracts go to fresh
@@ -168,15 +188,22 @@ trial-decrypting the ciphertext log (X25519 + ChaCha20-Poly1305).
 ## How a swap works
 
 A swap is a join-split whose second output is a swap commitment
-`scm = H(DOM_SWAP, epoch, pair_id, direction, delta, claim_pk, rseed)`; the
-burned amount `delta` is public but unlinkable to the sender. All swaps of an epoch (20 blocks) for a pair are summed; when the
-epoch ends anyone calls `end_epoch`, which executes the totals against the
-pool and publishes `BatchSwapOutputData` (deltas, outputs, unfilled amounts
-per direction). The swapper then proves, in zero knowledge, that a swap
-commitment in the tree belongs to them and that their outputs are the exact
-pro-rata share of the published result, and the contract mints those outputs
-as private notes. Only the batch totals and which batch is claimed are
-public; the link between swap and claim is not.
+`scm = H(DOM_SWAP, epoch, pair_id, direction, delta, claim_pk, rseed)`. The
+amount is sealed: the circuit also proves `delta_cm = H(DOM_DELTA, delta, r)`
+and that `(EPK, ct)` is an encryption of `(delta, r)` to the sealer's Jubjub
+key (ECDH and a Poseidon pad, all inside the proof), so the contract stores a
+commitment and a ciphertext it cannot open and the amount is unlinkable *and*
+hidden. When the epoch (20 blocks) ends, the sealer opens every entry of the
+batch, checks each against its commitment, and publishes the per-direction
+totals, either signed by the registered executor key (`end_epoch_signed`) or
+returned by OutLayer from the same program running inside an Intel TDX
+enclave (`end_epoch` + callback). The contract executes the totals against
+the pool and publishes `BatchSwapOutputData`. The swapper then proves, in
+zero knowledge, that a swap commitment in the tree belongs to them and that
+their outputs are the exact pro-rata share of the published result, and the
+contract mints those outputs as private notes. Public per swap: the sold side.
+Public per batch: the totals. Hidden: who swapped how much, and which claim
+belongs to which swap.
 
 ## Measured gas (sandbox, nearcore 2.14.0)
 
@@ -187,8 +214,8 @@ public; the link between swap and claim is not.
 | deposit (`ft_transfer_call` round trip, one tree insert) | 38 total |
 | join-split transfer (verify + 2 tree inserts) | 83 |
 | join-split withdrawal (same + `ft_transfer`) | 88 total |
-| swap (verify + 2 tree inserts) | 86 |
-| end_epoch (batch execution, no proof) | 11 |
+| sealed swap (verify 16 public inputs + 2 tree inserts) | 92 |
+| end_epoch_signed (signature check + batch execution) | 12 |
 | swap_claim (verify + 2 tree inserts) | 81 |
 
 The 300 Tgas limit per call leaves room for one proof plus tree updates per
@@ -205,9 +232,13 @@ action, which is why the protocol uses one proof per action.
 - **Dummy inputs.** Every join-split has two inputs; a zero-value dummy skips
   the membership check but still yields a nullifier, which the contract
   records. Dummies therefore use fresh randomness per transaction.
-- **Deposits and swap inputs are public amounts.** A deposit's amount and
-  commitment are visible; a swap reveals how much is burned, unlinkably.
-  Privacy starts inside the pool; sealed swap amounts are a stretch goal.
+- **Deposits are public amounts; swap amounts are sealed.** A deposit's amount
+  and commitment are visible. A swap reveals the sold side but not the amount:
+  only the sealer can open it, and the proof guarantees the ciphertext opens to
+  the committed amount. The sealer is trusted for the *amounts* only, not for
+  funds: it can publish nothing but totals, and a wrong total is caught by the
+  executor signature or the TEE attestation. Run it inside OutLayer for
+  hardware isolation, or as the pool operator's signed executor.
 - **Amounts are 112-bit.** Deposits, swaps and withdrawals above 2^112 - 1
   are rejected, so in-circuit products stay below the field modulus.
 - **Claims reveal the batch.** A claim names `(epoch, pair_id)` so the

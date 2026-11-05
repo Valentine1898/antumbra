@@ -36,7 +36,7 @@ ctx.onmessage = async (e: MessageEvent) => {
       switch (op) {
         case 'transfer': result = prover.prepare_transfer(wallet, p.asset_id, p.amount, p.to, seed); break;
         case 'withdraw': result = prover.prepare_withdraw(wallet, p.asset_id, p.amount, p.to, seed); break;
-        case 'swap': result = prover.prepare_swap(wallet, p.pair_id, p.asset_1, p.asset_2, p.sell_asset, p.amount, p.epoch, seed); break;
+        case 'swap': result = prover.prepare_swap(wallet, p.pair_id, p.asset_1, p.asset_2, p.sell_asset, p.amount, p.epoch, p.pk_x, p.pk_y, seed); break;
         case 'claim': result = prover.prepare_claim(wallet, p.index, p.asset_1, p.asset_2, p.batch, seed); break;
         default: throw new Error(`unknown op ${op}`);
       }

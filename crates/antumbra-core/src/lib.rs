@@ -12,6 +12,7 @@ pub mod consts;
 pub mod encoding;
 pub mod note;
 pub mod poseidon;
+pub mod sealing;
 pub mod tree;
 
 #[cfg(feature = "crypto")]
