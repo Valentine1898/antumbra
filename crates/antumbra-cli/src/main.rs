@@ -8,9 +8,12 @@ use antumbra_wallet::{
 };
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use near_workspaces::{types::NearToken, Account, Contract};
+use near_workspaces::{
+    types::{Gas, NearToken},
+    Account, AccountId, Contract,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -124,21 +127,40 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SealerCmd,
     },
-    /// Deploy the pool and test tokens, seed liquidity, write deployment.json.
+    /// Deploy the pool, register tokens, seed liquidity, write deployment.json.
     /// With --account/--key the contracts go to fresh subaccounts of that funded
     /// account (works on testnet and on a local sandbox); without them a testnet
-    /// dev account is created through the helper service.
+    /// dev account is created through the helper service. By default fresh test
+    /// tokens are deployed; `--token` (repeatable) registers existing NEP-141
+    /// tokens instead, in which case the deployer must already hold the
+    /// liquidity (see `wrap` and `mint`).
     Deploy {
         #[arg(long, default_value_t = 2)]
         tokens: u32,
+        /// Existing NEP-141 token accounts to register (repeat per token).
+        #[arg(long = "token")]
+        existing_tokens: Vec<String>,
         #[arg(long, default_value = "target/wasm32-unknown-unknown/release")]
         wasm_dir: PathBuf,
         /// Tokens minted to the deployer per test token.
         #[arg(long, default_value_t = 10_000_000)]
         mint: u128,
-        /// Liquidity seeded per side of the pair.
-        #[arg(long, default_value_t = 1_000_000)]
-        liquidity: u128,
+        /// Liquidity seeded per side of the pair, in base units: one value for
+        /// every token, or one per token in order.
+        #[arg(long, default_values_t = [1_000_000u128])]
+        liquidity: Vec<u128>,
+        /// NEAR given to the pool account: the contract's own storage takes about
+        /// 5.4, the rest is room for notes.
+        #[arg(long, default_value_t = 6)]
+        pool_near: u128,
+    },
+    /// Wrap NEAR into wNEAR for the signing account (amount in yoctoNEAR);
+    /// registers the account on the token first if needed.
+    Wrap {
+        #[arg(long, default_value = "wrap.testnet")]
+        token: String,
+        #[arg(long)]
+        amount: u128,
     },
     /// Mint test tokens (test tokens only).
     Mint {
@@ -434,6 +456,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Mint { token, to, amount } => {
             let chain = cli.chain().await?;
+            ensure_registered(&chain.account, &token.parse()?, &to.parse()?).await?;
             let r = ensure_ok(
                 chain
                     .account
@@ -460,10 +483,38 @@ async fn main() -> Result<()> {
         }
         Cmd::Deploy {
             tokens,
+            existing_tokens,
             wasm_dir,
             mint,
             liquidity,
-        } => deploy(&cli, *tokens, wasm_dir, *mint, *liquidity).await?,
+            pool_near,
+        } => {
+            deploy(
+                &cli,
+                *tokens,
+                existing_tokens,
+                wasm_dir,
+                *mint,
+                liquidity,
+                *pool_near,
+            )
+            .await?
+        }
+        Cmd::Wrap { token, amount } => {
+            let chain = cli.chain().await?;
+            let token: AccountId = token.parse()?;
+            ensure_registered(&chain.account, &token, chain.account.id()).await?;
+            let r = ensure_ok(
+                chain
+                    .account
+                    .call(&token, "near_deposit")
+                    .deposit(NearToken::from_yoctonear(*amount))
+                    .max_gas()
+                    .transact()
+                    .await?,
+            )?;
+            println!("wrapped {amount} yoctoNEAR into {token}: {}", describe(&r));
+        }
     }
     Ok(())
 }
@@ -471,10 +522,14 @@ async fn main() -> Result<()> {
 async fn deploy(
     cli: &Cli,
     n_tokens: u32,
+    existing: &[String],
     wasm_dir: &Path,
     mint: u128,
-    liquidity: u128,
+    liquidity: &[u128],
+    pool_near: u128,
 ) -> Result<()> {
+    // Existing tokens replace the test tokens entirely.
+    let n_tokens = if existing.is_empty() { n_tokens } else { 0 };
     let pool_wasm = fs::read(wasm_dir.join("antumbra_pool.wasm"))
         .with_context(|| "pool wasm missing; run scripts/build-contracts.sh")?;
     let ft_wasm = fs::read(wasm_dir.join("test_ft.wasm"))
@@ -500,10 +555,11 @@ async fn deploy(
             println!("deploying as subaccounts of {}", root.id());
             let pool_acc = root
                 .create_subaccount(&format!("pool-{suffix}"))
-                .initial_balance(NearToken::from_near(6))
+                .initial_balance(NearToken::from_near(pool_near))
                 .transact()
                 .await?
                 .into_result()?;
+            save_secrets(cli, &root, &pool_acc, None, None)?;
             let pool = pool_acc.deploy(&pool_wasm).await?.into_result()?;
             let mut fts = vec![];
             for i in 0..n_tokens {
@@ -534,6 +590,8 @@ async fn deploy(
         }
     };
     println!("deployer: {}", deployer.id());
+    // Keys first: a failure further down must never orphan a funded account.
+    save_secrets(cli, &deployer, pool.as_account(), None, None)?;
     let _ = ensure_ok(
         pool.call("new")
             .args_json(json!({"owner": pool.id()}))
@@ -576,8 +634,22 @@ async fn deploy(
         );
         token_ids.push(ft.id().clone());
     }
+    for (i, t) in existing.iter().enumerate() {
+        let token: AccountId = t.parse()?;
+        ensure_registered(&deployer, &token, pool.id()).await?;
+        let asset: u32 = ensure_ok(
+            pool.call("register_asset")
+                .args_json(json!({"token": token}))
+                .max_gas()
+                .transact()
+                .await?,
+        )?
+        .json()?;
+        println!("token {}: {token} (asset {asset}), registered", i + 1);
+        token_ids.push(token);
+    }
     let mut pair_id = 0;
-    if n_tokens >= 2 {
+    if token_ids.len() >= 2 {
         pair_id = ensure_ok(
             pool.call("register_pair")
                 .args_json(json!({"asset_1": 1, "asset_2": 2}))
@@ -586,18 +658,19 @@ async fn deploy(
                 .await?,
         )?
         .json()?;
-        for t in &token_ids[..2] {
+        let side = |i: usize| liquidity.get(i).or(liquidity.first()).copied().unwrap_or(0);
+        for (i, t) in token_ids[..2].iter().enumerate() {
             let _ = ensure_ok(
                 deployer
                     .call(t, "ft_transfer_call")
-                    .args_json(json!({"receiver_id": pool.id(), "amount": liquidity.to_string(), "msg": json!({"liquidity_pair": pair_id}).to_string()}))
+                    .args_json(json!({"receiver_id": pool.id(), "amount": side(i).to_string(), "msg": json!({"liquidity_pair": pair_id}).to_string()}))
                     .deposit(NearToken::from_yoctonear(1))
-                    .max_gas()
+                    .gas(Gas::from_tgas(100))
                     .transact()
                     .await?,
             )?;
         }
-        println!("pair {pair_id}: {liquidity} / {liquidity} liquidity seeded");
+        println!("pair {pair_id}: {} / {} liquidity seeded", side(0), side(1));
     }
     // The sealer keys: what swap amounts are encrypted to, and who may sign cleared totals.
     let (sealer_seed, executor_key) = new_sealer_secrets();
@@ -625,20 +698,62 @@ async fn deploy(
         deployer: deployer.id().to_string(),
     };
     fs::write(&cli.deployment, serde_json::to_string_pretty(&deployment)?)?;
-    let secrets = Secrets {
-        deployer_account: deployer.id().to_string(),
-        deployer_key: deployer.secret_key().to_string(),
-        pool_key: pool.as_account().secret_key().to_string(),
-        sealer_seed: Some(sealer_seed),
-        executor_key: Some(executor_key),
-    };
-    let secret_path = cli.deployment.with_extension("secret.json");
-    fs::write(&secret_path, serde_json::to_string_pretty(&secrets)?)?;
+    let secret_path = save_secrets(
+        cli,
+        &deployer,
+        pool.as_account(),
+        Some(sealer_seed),
+        Some(executor_key),
+    )?;
     println!(
         "wrote {} and {} (keep the latter private)",
         cli.deployment.display(),
         secret_path.display()
     );
+    Ok(())
+}
+
+/// Writes `<deployment>.secret.json`; called as soon as accounts exist and again once the sealer is known.
+fn save_secrets(
+    cli: &Cli,
+    deployer: &Account,
+    pool: &Account,
+    sealer_seed: Option<String>,
+    executor_key: Option<String>,
+) -> Result<PathBuf> {
+    let secrets = Secrets {
+        deployer_account: deployer.id().to_string(),
+        deployer_key: deployer.secret_key().to_string(),
+        pool_key: pool.secret_key().to_string(),
+        sealer_seed,
+        executor_key,
+    };
+    let path = cli.deployment.with_extension("secret.json");
+    fs::write(&path, serde_json::to_string_pretty(&secrets)?)?;
+    Ok(path)
+}
+
+/// Registers `who` on a NEP-141 token's storage if it is not registered yet
+/// (0.00125 NEAR; anything above the minimum is refunded by the token).
+async fn ensure_registered(payer: &Account, token: &AccountId, who: &AccountId) -> Result<()> {
+    let bal: Option<Value> = payer
+        .view(token, "storage_balance_of")
+        .args_json(json!({"account_id": who}))
+        .await?
+        .json()?;
+    if bal.is_some() {
+        return Ok(());
+    }
+    let _ = ensure_ok(
+        payer
+            .call(token, "storage_deposit")
+            .args_json(json!({"account_id": who, "registration_only": true}))
+            .deposit(NearToken::from_yoctonear(2_500_000_000_000_000_000_000))
+            .gas(Gas::from_tgas(15))
+            .transact()
+            .await?,
+    )?;
+    println!("registered {who} on {token}");
     Ok(())
 }
 
@@ -728,6 +843,15 @@ async fn sealer_cmd(cli: &Cli, cmd: &SealerCmd) -> Result<()> {
             let chain = cli.chain().await?;
             let secrets = sealer_secrets(&sec)?;
             println!("sealer watching pair {pair} every {interval_secs}s; ctrl-c to stop");
+            // One wide sweep first: epochs that ended while the sealer was down.
+            match ops::clear_pending(&chain, &secrets, *pair, 50).await {
+                Ok(cleared) => {
+                    for c in cleared {
+                        println!("{}", c.summary);
+                    }
+                }
+                Err(e) => eprintln!("startup sweep failed: {e:#}"),
+            }
             loop {
                 match ops::clear_pending(&chain, &secrets, *pair, *lookback).await {
                     Ok(cleared) => {

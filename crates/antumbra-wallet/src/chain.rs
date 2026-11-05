@@ -107,12 +107,24 @@ impl Chain {
             .json()?)
     }
 
+    /// Pool call with 150 Tgas: enough for any proof-carrying method (the
+    /// heaviest, a sealed swap, burns about 92), and a public RPC node refuses
+    /// a 300 Tgas call unless the signer holds about a NEAR up front.
     pub async fn call(&self, method: &str, args: Value) -> Result<ExecutionFinalResult> {
+        self.call_with_gas(method, args, 150).await
+    }
+
+    pub async fn call_with_gas(
+        &self,
+        method: &str,
+        args: Value,
+        tgas: u64,
+    ) -> Result<ExecutionFinalResult> {
         Ok(self
             .account
             .call(&self.pool, method)
             .args_json(args)
-            .max_gas()
+            .gas(near_workspaces::types::Gas::from_tgas(tgas))
             .transact()
             .await?)
     }

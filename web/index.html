@@ -30,11 +30,18 @@
     </header>
 
     <main class="stage">
-      <div class="column">
-        <section class="hero reveal">
-          <p class="eyebrow">Shielded balance <span class="muted">· only you can see this</span></p>
+      <!-- Two realms: what NEAR can see, and what only you can see. -->
+      <section class="realms reveal">
+        <article class="realm light">
+          <p class="eyebrow">In the light <span class="muted">· what NEAR sees</span></p>
+          <div id="light-account" class="realm-title mono"></div>
+          <div id="light-balances" class="pub-balances"></div>
+        </article>
+        <i class="seam" aria-hidden="true"></i>
+        <i id="crossing" class="crossing" aria-hidden="true"></i>
+        <article class="realm shade">
+          <p class="eyebrow">In the shade <span class="muted">· only you can see this</span></p>
           <div id="balances" class="balances"></div>
-          <div id="swaps" class="swaps"></div>
           <div class="hero-foot">
             <button id="sync" class="icon-btn" title="Sync with the pool" aria-label="Sync">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
@@ -43,99 +50,68 @@
             <span class="spacer"></span>
             <span class="addr"><span class="muted">your address</span> <code id="address-short" title="click to copy"></code></span>
           </div>
-          <p id="toast" class="toast" aria-live="polite"></p>
-        </section>
+        </article>
+      </section>
+      <p id="toast" class="toast" aria-live="polite"></p>
 
-        <section class="panel actions reveal">
-          <nav class="tabs" role="tablist">
-            <button data-tab="deposit" class="active">Deposit</button>
-            <button data-tab="transfer">Send</button>
-            <button data-tab="withdraw">Withdraw</button>
-            <button data-tab="swap">Swap</button>
-            <button data-tab="claim">Claim</button>
+      <div class="two">
+        <!-- The threshold: everything that crosses between the realms, or moves inside the shade. -->
+        <section class="panel threshold reveal">
+          <nav class="routes" aria-label="Direction">
+            <button data-route="in" class="active"><span class="arrow">→</span>Into the shade</button>
+            <button data-route="out"><span class="arrow">←</span>Out of the shade</button>
+            <button data-route="send"><span class="arrow">↝</span>To another shade</button>
           </nav>
-
-          <form id="form-deposit" class="tab">
-            <p class="hint">Public: the amount and a note commitment. <em>Hidden: who owns the note.</em></p>
+          <form id="form-move" data-route="in">
+            <p id="move-hint" class="hint"></p>
             <div class="fields">
-              <label>Token <select id="deposit-token"></select></label>
-              <label>Amount <input id="deposit-amount" inputmode="numeric" value="600000" /></label>
+              <label>Amount <input id="move-amount" inputmode="decimal" placeholder="0.5" autocomplete="off" /></label>
+              <label>Token <select id="move-token"></select></label>
             </div>
-            <button type="submit" class="primary">Deposit into the shade</button>
+            <label id="move-to-wrap" class="hidden"><span id="move-to-label"></span> <input id="move-to" autocomplete="off" /></label>
+            <button type="submit" id="move-submit" class="primary">Shield</button>
           </form>
-
-          <form id="form-transfer" class="tab hidden">
-            <p class="hint">Public: two nullifiers, two commitments. <em>Hidden: sender, recipient, amount.</em></p>
-            <div class="fields">
-              <label>Asset <select id="transfer-asset"></select></label>
-              <label>Amount <input id="transfer-amount" inputmode="numeric" value="250000" /></label>
-            </div>
-            <label>To <input id="transfer-to" placeholder="antumbra:…" /></label>
-            <button type="submit" class="primary">Prove and send</button>
-          </form>
-
-          <form id="form-withdraw" class="tab hidden">
-            <p class="hint">Public: the amount and the recipient account. <em>Hidden: which note paid.</em></p>
-            <div class="fields">
-              <label>Asset <select id="withdraw-asset"></select></label>
-              <label>Amount <input id="withdraw-amount" inputmode="numeric" value="100000" /></label>
-            </div>
-            <label>To NEAR account <input id="withdraw-to" placeholder="name.testnet" /></label>
-            <button type="submit" class="primary">Prove and withdraw</button>
-          </form>
-
-          <form id="form-swap" class="tab hidden">
-            <p class="hint">Public: the sold side and a sealed amount only the sealer can open. <em>Hidden: who is swapping, and how much.</em> Everyone in the epoch gets one price.</p>
-            <div class="fields">
-              <label>Sell <select id="swap-sell"></select></label>
-              <label>Amount <input id="swap-amount" inputmode="numeric" value="100000" /></label>
-            </div>
-            <p class="muted small">Current epoch <span id="swap-epoch" class="mono"></span>, <span id="swap-left" class="mono"></span> blocks until it clears.</p>
-            <button type="submit" class="primary">Prove and swap</button>
-          </form>
-
-          <div id="form-claim" class="tab hidden">
-            <p class="hint">Once the sealer clears an epoch, your share becomes private notes. <em>Public: which batch. Hidden: which swap, and its size.</em></p>
-            <button id="claim-all" class="primary">Claim everything claimable</button>
-          </div>
         </section>
 
-        <section class="panel activity reveal">
-          <div class="panel-head"><h3>Activity</h3><span id="keys-status" class="muted small"></span></div>
-          <ol id="log"></ol>
+        <section class="panel swapdeck reveal">
+          <div class="panel-head"><h3>Swap in the shade</h3><span id="epoch-pill" class="muted small mono"></span></div>
+          <form id="form-swap">
+            <p class="hint">The amount is sealed; only the sealer opens it to clear the epoch. <em>Hidden: who swaps, and how much.</em> One price for everyone in the epoch.</p>
+            <div class="fields">
+              <label>Sell <input id="swap-amount" inputmode="decimal" placeholder="0.1" autocomplete="off" /></label>
+              <label>Token <select id="swap-sell"></select></label>
+            </div>
+            <p class="muted small">You get <strong id="swap-buy"></strong> at the clearing price of epoch <span id="swap-epoch" class="mono"></span>, <span id="swap-left" class="mono"></span> blocks from now.</p>
+            <div class="bar-track"><div id="epoch-bar" class="bar-fill"></div></div>
+            <button type="submit" class="primary">Seal and swap</button>
+          </form>
+          <div id="swaps" class="swap-cards"></div>
         </section>
       </div>
 
-      <aside class="column geek-only">
-        <section class="panel reveal">
+      <section class="panel activity reveal">
+        <div class="panel-head"><h3>Activity</h3><span id="keys-status" class="muted small"></span></div>
+        <ol id="log"></ol>
+      </section>
+
+      <section class="geek-grid geek-only">
+        <section class="panel">
           <div class="panel-head"><h3>Pool</h3><a id="pool-link" class="link small" target="_blank" rel="noreferrer">explorer ↗</a></div>
           <dl class="kv">
-            <dt>contract</dt><dd id="pool-id" class="mono"></dd>
+            <dt>contract</dt><dd id="pool-id" class="mono clip"></dd>
             <dt>root</dt><dd id="pool-root" class="mono clip"></dd>
-            <dt>epoch</dt><dd><span id="epoch" class="mono"></span> <span id="epoch-left" class="muted small"></span>
-              <div class="bar-track"><div id="epoch-bar" class="bar-fill"></div></div></dd>
+            <dt>epoch</dt><dd><span id="epoch" class="mono"></span> <span id="epoch-left" class="muted small"></span></dd>
             <dt>leaves</dt><dd id="leaves" class="mono"></dd>
-            <dt>pair 1</dt><dd id="pair" class="mono"></dd>
+            <dt>pair</dt><dd id="pair" class="mono"></dd>
             <dt>batch</dt><dd id="batch" class="mono"></dd>
             <dt>sealer</dt><dd id="sealer" class="mono"></dd>
           </dl>
           <div class="row">
             <button id="end-epoch" class="ghost">Clear last epoch via TEE</button>
-            <button id="mint" class="ghost">Mint 1 000 000 test tokens</button>
           </div>
         </section>
 
-        <section class="panel reveal">
-          <div class="panel-head"><h3>Your notes</h3><span class="muted small">positions in the commitment tree</span></div>
-          <table id="notes-table" class="table"><thead><tr><th>#</th><th>asset</th><th>amount</th><th>pos</th><th>state</th></tr></thead><tbody></tbody></table>
-        </section>
-
-        <section class="panel reveal">
-          <div class="panel-head"><h3>Your swaps</h3></div>
-          <table id="swaps-table" class="table"><thead><tr><th>#</th><th>epoch</th><th>side</th><th>delta</th><th>pos</th><th>state</th></tr></thead><tbody></tbody></table>
-        </section>
-
-        <section class="panel reveal">
+        <section class="panel">
           <div class="panel-head"><h3>Wallet</h3></div>
           <p class="small">Address <code id="address" class="wrap"></code> <button id="copy-address" class="link">copy</button></p>
           <p class="muted small">Keys and notes live in this browser's storage. Export before clearing site data.</p>
@@ -145,7 +121,17 @@
             <button id="reset-wallet" class="ghost danger">New wallet</button>
           </div>
         </section>
-      </aside>
+
+        <section class="panel">
+          <div class="panel-head"><h3>Your notes</h3><span class="muted small">positions in the commitment tree</span></div>
+          <table id="notes-table" class="table"><thead><tr><th>#</th><th>asset</th><th>amount</th><th>pos</th><th>state</th></tr></thead><tbody></tbody></table>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h3>Your swaps</h3></div>
+          <table id="swaps-table" class="table"><thead><tr><th>#</th><th>epoch</th><th>side</th><th>delta</th><th>pos</th><th>state</th></tr></thead><tbody></tbody></table>
+        </section>
+      </section>
     </main>
 
     <dialog id="signer-dialog" class="dialog">

@@ -19,6 +19,11 @@ TOKEN2=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['tokens
 DEPLOYER=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['deployer'])" "$DEPLOYMENT")
 PAIR=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['pair_id'])" "$DEPLOYMENT")
 
+# Amounts below are in base units. With a 24-decimal token 1 (wNEAR) they are
+# scaled up so the demo moves real fractions of a token; override with AMOUNT_UNIT.
+case "$TOKEN1" in wrap.*) UNIT="${AMOUNT_UNIT:-1000000000000000000}" ;; *) UNIT="${AMOUNT_UNIT:-1}" ;; esac
+amt() { python3 -c "print($1 * $UNIT)"; }
+
 DEMO_DIR="${DEMO_DIR:-demo-wallets}"
 mkdir -p "$DEMO_DIR"
 A="$DEMO_DIR/alice.wallet.json"
@@ -37,24 +42,33 @@ echo "bob:   $BOB_ADDR"
 step "pool state"
 $ANT info
 
-step "alice deposits 600000 of token 1 into a shielded note"
-$ANT --wallet "$A" deposit --token "$TOKEN1" --amount 600000
+step "the gas payer gets some of token 1"
+case "$TOKEN1" in
+  wrap.*) $ANT wrap --token "$TOKEN1" --amount "$(amt 700000)" ;;
+  *) $ANT mint --token "$TOKEN1" --to "$DEPLOYER" --amount "$(amt 1000000)" ;;
+esac
+
+step "alice deposits $(amt 600000) base units of token 1 into a shielded note"
+$ANT --wallet "$A" deposit --token "$TOKEN1" --amount "$(amt 600000)"
 $ANT --wallet "$A" sync
 
 step "alice privately sends 250000 to bob"
-$ANT --wallet "$A" transfer --asset 1 --amount 250000 --to "$BOB_ADDR"
+$ANT --wallet "$A" transfer --asset 1 --amount "$(amt 250000)" --to "$BOB_ADDR"
 $ANT --wallet "$B" sync
 
 step "bob withdraws 100000 to the deployer account (any NEAR account works)"
-$ANT --wallet "$B" withdraw --asset 1 --amount 100000 --to "$DEPLOYER"
+$ANT --wallet "$B" withdraw --asset 1 --amount "$(amt 100000)" --to "$DEPLOYER"
 $ANT --wallet "$B" sync
 
 step "alice swaps 100000 of asset 1 for asset 2"
 $ANT --wallet "$A" sync
-$ANT --wallet "$A" swap --pair "$PAIR" --sell 1 --amount 100000
+$ANT --wallet "$A" swap --pair "$PAIR" --sell 1 --amount "$(amt 100000)"
 
-step "waiting for the epoch to end, then executing the batch and claiming"
+step "waiting for the epoch to end and the sealer to clear it, then claiming"
 for i in $(seq 1 40); do
+  # With the sealer's secrets in the secret file (any deployment made by `deploy`)
+  # this clears the epoch itself; otherwise the pool's own sealer daemon does.
+  $ANT sealer clear --pair "$PAIR" >/dev/null 2>&1 || true
   OUT=$($ANT --wallet "$A" claim 2>&1 || true)
   echo "$OUT" | tail -3
   if echo "$OUT" | grep -q "claimed:"; then break; fi

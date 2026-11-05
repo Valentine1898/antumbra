@@ -1,9 +1,9 @@
 {
   "network": "testnet",
-  "pool": "pool-1ba5bb.dev-20261105111746-77978043288771.testnet",
+  "pool": "pool-afb31c.dev-20261105111746-77978043288771.testnet",
   "tokens": [
-    "ft1-1ba5bb.dev-20261105111746-77978043288771.testnet",
-    "ft2-1ba5bb.dev-20261105111746-77978043288771.testnet"
+    "wrap.testnet",
+    "usdc.fakes.testnet"
   ],
   "pair_id": 1,
   "deployer": "dev-20261105111746-77978043288771.testnet"

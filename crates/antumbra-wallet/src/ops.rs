@@ -213,13 +213,14 @@ pub async fn clear_epoch(
     let sig = secrets.executor.sign(&msg).to_bytes();
     let r = ensure_ok(
         chain
-            .call(
+            .call_with_gas(
                 "end_epoch_signed",
                 json!({
                     "epoch": epoch, "pair_id": pair_id,
                     "delta_1": totals.delta_1.to_string(), "delta_2": totals.delta_2.to_string(),
                     "signature": pure::b64(&sig),
                 }),
+                30,
             )
             .await?,
     )?;

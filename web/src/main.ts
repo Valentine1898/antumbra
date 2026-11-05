@@ -6,11 +6,18 @@ import { getProvingKey, local, putProvingKey } from './storage';
 
 /// Public testnet RPCs, tried in order; `?rpc=<url>` puts your own first. Each one limits requests per IP.
 const rpcParam = new URLSearchParams(location.search).get('rpc');
-const RPC_URLS = [...(rpcParam ? [rpcParam] : []), 'https://test.rpc.fastnear.com', 'https://rpc.testnet.near.org', 'https://near-testnet.drpc.org'];
+const RPC_URLS = [...(rpcParam ? [rpcParam] : []), 'https://test.rpc.fastnear.com', 'https://near-testnet.drpc.org', 'https://rpc.testnet.near.org'];
 const EXPLORER = 'https://testnet.nearblocks.io';
 const GAS_POOL = 200;
 const GAS_FT = 100;
 const EPOCH_BLOCKS = 20;
+/// NEP-145 registration deposit; a token refunds whatever exceeds its minimum.
+const STORAGE_DEPOSIT = '2500000000000000000000';
+const ONE_NEAR = '1000000000000000000000000';
+
+type Route = 'in' | 'out' | 'send';
+interface Token { assetId: number; account: string; symbol: string; decimals: number; wrapsNear: boolean }
+interface SwapEntry { index: number; epoch: number; pair_id: number; direction: number; delta: string; position: number; claimed: boolean }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -20,8 +27,14 @@ let signer: Signer | null = null;
 let walletJson: string | null = local.get('wallet');
 let epochInfo: EpochInfo | null = null;
 let pair: PairInfo | null = null;
+let tokens: Token[] = [];
+let route: Route = 'in';
 let selectorBundle: Awaited<ReturnType<typeof WalletSigner.setup>> | null = null;
 let sealerShown = false;
+let claiming = false;
+let tick = 0;
+/// For each epoch of a pending swap: whether the sealer has cleared its batch.
+const batchCleared = new Map<number, boolean>();
 
 // ---------- mode ----------
 function setMode(mode: 'calm' | 'geek') {
@@ -81,6 +94,47 @@ function shortAddress(addr: string): string {
   return `${tag}:${pk.slice(0, 6)}…${pk.slice(-4)}:${enc.slice(0, 4)}…${enc.slice(-4)}`;
 }
 
+// ---------- amounts: humans type decimals, the pool counts base units ----------
+function toBase(text: string, decimals: number): string {
+  const t = text.replace(/[\s,_]/g, '');
+  if (!/^(\d+\.?\d*|\.\d+)$/.test(t)) throw new Error('enter a positive amount');
+  const [whole = '', frac = ''] = t.split('.');
+  if (frac.length > decimals) throw new Error(`${decimals} decimal places at most for this token`);
+  const base = BigInt(whole || '0') * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, '0') || '0');
+  if (base === 0n) throw new Error('enter a positive amount');
+  return base.toString();
+}
+
+function fromBase(base: string | bigint, decimals: number, maxFrac = 4): string {
+  const b = BigInt(base);
+  const unit = 10n ** BigInt(decimals);
+  const whole = (b / unit).toLocaleString('en-US');
+  const frac = (b % unit).toString().padStart(decimals, '0').slice(0, maxFrac).replace(/0+$/, '');
+  if (b > 0n && b < unit && frac === '') return `<0.${'0'.repeat(Math.max(maxFrac - 1, 0))}1`;
+  return frac ? `${whole}.${frac}` : whole;
+}
+
+function token(assetId: number): Token {
+  return tokens.find((t) => t.assetId === assetId) ?? { assetId, account: '?', symbol: `asset ${assetId}`, decimals: 0, wrapsNear: false };
+}
+function amountText(assetId: number, base: string): string {
+  const t = token(assetId);
+  return `${fromBase(base, t.decimals)} ${t.symbol}`;
+}
+function selectedToken(selectId: string): Token {
+  return token(Number(($(selectId) as HTMLSelectElement).value));
+}
+
+/// NEP-148 metadata for the pool's tokens; test tokens without metadata get a plain name.
+async function loadTokens() {
+  tokens = await Promise.all(
+    deployment.tokens.map(async (account, i) => {
+      const meta = await chain.ftMetadata(account).catch(() => null);
+      return { assetId: i + 1, account, symbol: meta?.symbol ?? `TEST${i + 1}`, decimals: meta?.decimals ?? 0, wrapsNear: /^wrap\.(testnet|near)$/.test(account) };
+    }),
+  );
+}
+
 // ---------- worker (proving) ----------
 const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 let nextId = 1;
@@ -129,48 +183,61 @@ function ensureWallet() {
   if (!walletJson) saveWallet(wasm.wallet_new(seed()));
 }
 
-/// Test tokens carry no metadata, so they are named by their asset id.
-function assetName(assetId: number): string {
-  return `token ${assetId}`;
-}
-function assetLabel(assetId: number): string {
-  const token = deployment.tokens[assetId - 1];
-  return token ? `token ${assetId} · ${token}` : `asset ${assetId}`;
+function summary(): any {
+  return JSON.parse(wasm.wallet_summary(walletJson!));
 }
 
 let lastRender = '';
+let lastBalances = '';
 function renderWallet() {
   if (!walletJson) return;
   const summaryJson = wasm.wallet_summary(walletJson);
-  const key = summaryJson + '|' + (epochInfo?.epoch ?? '') + '|' + (pair ? pair.asset_1 + ':' + pair.asset_2 : '');
+  const key = [summaryJson, epochInfo?.epoch, epochInfo?.blocks_left, pair?.pair_id, claiming, signer?.kind, [...batchCleared.entries()].join(','), tokens.map((t) => t.symbol).join()].join('|');
   if (key === lastRender) return;
   lastRender = key;
   const s = JSON.parse(summaryJson);
   $('address').textContent = s.address;
   $('address-short').textContent = shortAddress(s.address);
 
-  const b = $('balances');
-  b.innerHTML = '';
-  if (s.balances.length === 0) {
-    b.innerHTML = '<div class="balance empty"><span class="amount">nothing in the shade yet</span></div>';
-  }
-  for (const x of s.balances) {
-    const row = document.createElement('div');
-    row.className = 'balance';
-    row.innerHTML = `<span class="amount">${Number(x.amount).toLocaleString('en-US')}</span><span class="asset">${assetName(x.asset_id)}</span>`;
-    b.appendChild(row);
+  // Balances re-render (and unveil again) only when they change.
+  const balancesKey = JSON.stringify(s.balances) + tokens.map((t) => t.symbol).join();
+  if (balancesKey !== lastBalances) {
+    lastBalances = balancesKey;
+    const b = $('balances');
+    b.innerHTML = '';
+    if (s.balances.length === 0) b.innerHTML = '<div class="balance empty"><span class="amount">nothing in the shade yet</span></div>';
+    for (const x of s.balances) {
+      const t = token(x.asset_id);
+      const row = document.createElement('div');
+      row.className = 'balance';
+      row.innerHTML = `<span class="amount">${fromBase(x.amount, t.decimals)}</span><span class="asset">${t.symbol}</span>`;
+      b.appendChild(row);
+    }
   }
 
   const sw = $('swaps');
   sw.innerHTML = '';
-  for (const x of s.swaps) {
-    const row = document.createElement('div');
-    row.className = 'swap-row';
-    let chip = '<span class="chip ok">claimed</span>';
-    if (!x.claimed) chip = epochInfo && x.epoch < epochInfo.epoch ? '<span class="chip hot">claimable</span>' : '<span class="chip">clearing</span>';
-    const side = x.direction === 1 ? pair?.asset_1 ?? 1 : pair?.asset_2 ?? 2;
-    row.innerHTML = `${chip}<span>swap of ${Number(x.delta).toLocaleString('en-US')} ${assetName(side)}, epoch ${x.epoch}</span>`;
-    sw.appendChild(row);
+  for (const x of s.swaps as SwapEntry[]) {
+    const sold = x.direction === 1 ? (pair?.asset_1 ?? 1) : (pair?.asset_2 ?? 2);
+    const bought = x.direction === 1 ? (pair?.asset_2 ?? 2) : (pair?.asset_1 ?? 1);
+    const card = document.createElement('div');
+    card.className = 'card';
+    let chip: string;
+    let note = '';
+    if (x.claimed) chip = '<span class="chip ok">claimed</span>';
+    else if (!epochInfo || x.epoch >= epochInfo.epoch) { chip = '<span class="chip hot">sealed</span>'; note = epochInfo ? `epoch ends in ${epochInfo.blocks_left} blocks` : ''; }
+    else if (!batchCleared.get(x.epoch)) { chip = '<span class="chip hot">sealed</span>'; note = 'epoch over, the sealer is clearing it'; }
+    else if (claiming) chip = '<span class="chip">claiming…</span>';
+    else { chip = '<span class="chip ok">cleared</span>'; note = signer?.kind === 'devkey' ? 'claiming shortly' : 'ready to claim'; }
+    card.innerHTML = `${chip}<span class="what">${amountText(sold, x.delta)} → ${token(bought).symbol}<span class="muted"> · epoch ${x.epoch}${note ? ' · ' + note : ''}</span></span>`;
+    if (!x.claimed && batchCleared.get(x.epoch) && !claiming) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost tiny';
+      btn.textContent = 'Claim';
+      btn.addEventListener('click', () => void busy(btn, () => claimSwap(x)));
+      card.appendChild(btn);
+    }
+    sw.appendChild(card);
   }
 
   const nt = $('notes-table').querySelector('tbody')!;
@@ -178,14 +245,15 @@ function renderWallet() {
   for (const n of s.notes) {
     const tr = document.createElement('tr');
     if (n.spent) tr.className = 'spent';
-    tr.innerHTML = `<td>${n.index}</td><td>${n.asset_id}</td><td>${n.amount}</td><td>${n.position}</td><td>${n.spent ? 'spent' : 'unspent'}</td>`;
+    tr.innerHTML = `<td>${n.index}</td><td>${token(n.asset_id).symbol}</td><td title="${n.amount} base units">${fromBase(n.amount, token(n.asset_id).decimals, 6)}</td><td>${n.position}</td><td>${n.spent ? 'spent' : 'unspent'}</td>`;
     nt.appendChild(tr);
   }
   const st = $('swaps-table').querySelector('tbody')!;
   st.innerHTML = s.swaps.length ? '' : '<tr class="empty"><td colspan="6">no swaps yet</td></tr>';
-  for (const x of s.swaps) {
+  for (const x of s.swaps as SwapEntry[]) {
+    const sold = x.direction === 1 ? (pair?.asset_1 ?? 1) : (pair?.asset_2 ?? 2);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${x.index}</td><td>${x.epoch}</td><td>${x.direction === 1 ? '1→2' : '2→1'}</td><td>${x.delta}</td><td>${x.position}</td><td>${x.claimed ? 'claimed' : 'open'}</td>`;
+    tr.innerHTML = `<td>${x.index}</td><td>${x.epoch}</td><td>${x.direction === 1 ? '1→2' : '2→1'}</td><td title="${x.delta} base units">${amountText(sold, x.delta)}</td><td>${x.position}</td><td>${x.claimed ? 'claimed' : 'open'}</td>`;
     st.appendChild(tr);
   }
 }
@@ -196,7 +264,7 @@ async function sync(verbose = true) {
   $('sync-status').textContent = 'syncing…';
   try {
     const total = await chain.leafCount();
-    let from = JSON.parse(wasm.wallet_summary(walletJson!)).leaves as number;
+    let from = summary().leaves as number;
     let newNotes = 0, newSwaps = 0;
     while (from < total) {
       const page = await chain.leaves(from, 50);
@@ -228,7 +296,97 @@ async function syncSoon() {
   setTimeout(() => void sync(false), 4000);
 }
 
+// ---------- the light: what the gas payer holds in public ----------
+let lastLight = '';
+function pubRow(amount: string, symbol: string, act: { label: string; run: () => Promise<void> } | null): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'pub-row';
+  row.innerHTML = `<span class="pub-amount">${amount}</span><span class="pub-symbol">${symbol}</span><span class="spacer"></span>`;
+  if (act) {
+    const btn = document.createElement('button');
+    btn.className = 'ghost tiny';
+    btn.textContent = act.label;
+    btn.addEventListener('click', () => void busy(btn, act.run));
+    row.appendChild(btn);
+  }
+  return row;
+}
+
+async function refreshLight() {
+  const title = $('light-account');
+  const el = $('light-balances');
+  if (!signer) {
+    if (lastLight !== 'none') {
+      lastLight = 'none';
+      title.textContent = 'nobody is paying gas yet';
+      el.innerHTML = '<p class="muted small">Choose who pays gas (top right) and this side fills in. Everything here is public on NEAR.</p>';
+    }
+    return;
+  }
+  const [near, ...bals] = await Promise.all([
+    chain.nearBalance(signer.accountId).catch(() => '0'),
+    ...tokens.map((t) => chain.ftBalance(t.account, signer!.accountId).catch(() => '0')),
+  ]);
+  const key = [signer.accountId, near, ...bals].join('|');
+  if (key === lastLight) return;
+  lastLight = key;
+  title.textContent = signer.accountId;
+  el.innerHTML = '';
+  el.appendChild(pubRow(fromBase(near, 24, 2), 'NEAR', null));
+  tokens.forEach((t, i) => {
+    const act = t.wrapsNear ? { label: 'wrap 1 NEAR', run: () => wrapNear(t) } : { label: `get 100 ${t.symbol}`, run: () => mintTest(t) };
+    el.appendChild(pubRow(fromBase(bals[i], t.decimals), t.symbol, act));
+  });
+}
+
+/// NEP-145: a token only holds balances for registered accounts, so register before sending anyone tokens.
+async function ensureRegistered(tokenAccount: string, who: string) {
+  const s = requireSigner();
+  if (await chain.storageBalance(tokenAccount, who)) return;
+  const r = await s.call(tokenAccount, 'storage_deposit', { account_id: who, registration_only: true }, 30, STORAGE_DEPOSIT);
+  if (r === 'redirect') throw new Error('the wallet is registering the account; try again when it returns');
+  if (!r.ok) throw new Error(`could not register ${who} on ${tokenAccount}: ${r.error}`);
+  log(`registered ${who} on ${tokenAccount} (NEP-145 storage)`, { hash: r.hash, geek: true });
+}
+
+async function wrapNear(t: Token) {
+  const s = requireSigner();
+  await ensureRegistered(t.account, s.accountId);
+  setToast('Wrapping 1 NEAR…', true);
+  const r = await s.call(t.account, 'near_deposit', {}, 30, ONE_NEAR);
+  if (r === 'redirect') return;
+  reportTx(`wrapped 1 NEAR into ${t.symbol}`, r);
+  await refreshLight();
+}
+
+async function mintTest(t: Token) {
+  const s = requireSigner();
+  await ensureRegistered(t.account, s.accountId);
+  setToast(`Minting 100 ${t.symbol}…`, true);
+  const r = await s.call(t.account, 'mint', { account_id: s.accountId, amount: toBase('100', t.decimals) }, 30, '0');
+  if (r === 'redirect') return;
+  reportTx(`minted 100 ${t.symbol} from the test faucet`, r);
+  await refreshLight();
+}
+
 // ---------- pool ----------
+async function refreshBatches() {
+  if (!walletJson || !epochInfo) return;
+  const epochs = new Set<number>();
+  for (const x of summary().swaps as SwapEntry[]) if (!x.claimed && x.epoch < epochInfo.epoch && !batchCleared.get(x.epoch)) epochs.add(x.epoch);
+  for (const ep of epochs) {
+    const b = await chain.getBatch(ep, deployment.pair_id);
+    batchCleared.set(ep, !!b?.executed);
+  }
+}
+
+function updateSwapBuy() {
+  if (!pair || tokens.length === 0) return;
+  const sell = selectedToken('swap-sell');
+  const buy = sell.assetId === pair.asset_1 ? pair.asset_2 : pair.asset_1;
+  $('swap-buy').textContent = token(buy).symbol;
+}
+
 async function refreshPool() {
   try {
     const [e, p, root, leaves] = await Promise.all([chain.currentEpoch(), chain.getPair(deployment.pair_id), chain.getRoot(), chain.leafCount()]);
@@ -236,13 +394,14 @@ async function refreshPool() {
     pair = p;
     $('epoch').textContent = String(e.epoch);
     $('epoch-left').textContent = `${e.blocks_left} blocks left`;
-    ($('epoch-bar') as HTMLElement).style.width = `${Math.round(((EPOCH_BLOCKS - e.blocks_left) / EPOCH_BLOCKS) * 100)}%`;
+    $('epoch-bar').style.width = `${Math.round(((EPOCH_BLOCKS - e.blocks_left) / EPOCH_BLOCKS) * 100)}%`;
     $('swap-epoch').textContent = String(e.epoch);
     $('swap-left').textContent = String(e.blocks_left);
+    $('epoch-pill').textContent = `epoch ${e.epoch} · ${e.blocks_left} blocks left`;
     $('pool-root').textContent = root;
     $('pool-root').title = root;
     $('leaves').textContent = String(leaves);
-    if (p) $('pair').textContent = `${assetName(p.asset_1)} ${Number(p.reserve_1).toLocaleString('en-US')} / ${assetName(p.asset_2)} ${Number(p.reserve_2).toLocaleString('en-US')}`;
+    if (p) $('pair').textContent = `${amountText(p.asset_1, p.reserve_1)} / ${amountText(p.asset_2, p.reserve_2)}`;
     const batch = await chain.getBatch(e.epoch, deployment.pair_id);
     $('batch').textContent = batch ? `epoch ${e.epoch}: ${batch.entries} sealed swap${batch.entries === 1 ? '' : 's'}, amounts hidden until the sealer clears it` : `epoch ${e.epoch}: empty so far`;
     if (!sealerShown) {
@@ -250,7 +409,11 @@ async function refreshPool() {
       $('sealer').textContent = sealer ? `${sealer.pk[0].slice(0, 10)}… (${sealer.outlayer ? 'OutLayer TEE' : 'signed executor'})` : 'none registered';
       sealerShown = true;
     }
+    await refreshBatches();
+    updateSwapBuy();
     renderWallet();
+    if (tick++ % 3 === 0) void refreshLight();
+    void autoClaim();
   } catch (e) {
     console.error(e);
   }
@@ -265,16 +428,17 @@ function requireSigner(): Signer {
   return signer;
 }
 
-async function sendPrepared(prepared: any, describe: string): Promise<void> {
+async function sendPrepared(prepared: any, describe: string): Promise<boolean> {
   const s = requireSigner();
   local.set('pending', JSON.stringify({ prepared, describe }));
   setToast('Waiting for the chain…', true);
   const r = await s.call(deployment.pool, prepared.method, prepared.args, GAS_POOL, '0');
-  if (r === 'redirect') return;
+  if (r === 'redirect') return false;
   local.del('pending');
   reportTx(describe, r, prepared.public_view);
   if (r.ok) saveWallet(wasm.apply_prepared(walletJson!, JSON.stringify(prepared)));
   await syncSoon();
+  return r.ok;
 }
 
 function reportTx(describe: string, r: TxResult, pub?: unknown) {
@@ -293,62 +457,123 @@ async function busy<T>(btn: HTMLButtonElement, f: () => Promise<T>): Promise<T |
   try { return await f(); } catch (e) { fail(e); return undefined; } finally { btn.disabled = false; }
 }
 
-function amountOf(id: string): string {
-  const v = ($(id) as HTMLInputElement).value.replace(/[\s,_]/g, '');
-  if (!/^\d+$/.test(v) || v === '0') throw new Error('enter a whole positive amount');
-  return v;
+async function proveAndSend(op: string, params: Record<string, unknown>, describe: string): Promise<boolean> {
+  requireSigner();
+  setToast('Proving in your browser…', true);
+  const { result, ms } = await prepare(op, params);
+  log(`${op} proof built in ${(ms / 1000).toFixed(1)} s, inside a Web Worker`, { geek: true });
+  return sendPrepared(JSON.parse(result), describe);
 }
 
-// ---------- actions ----------
-async function doDeposit(btn: HTMLButtonElement) {
+/// A mote of value crossing the seam between the realms.
+function crossing(dir: 'in' | 'out') {
+  const el = $('crossing');
+  el.classList.remove('go-in', 'go-out');
+  void el.offsetWidth;
+  el.classList.add(dir === 'in' ? 'go-in' : 'go-out');
+}
+
+// ---------- the threshold: into, out of, or within the shade ----------
+const ROUTES: Record<Route, { hint: string; verb: string; to: string | null }> = {
+  in: { hint: 'Public: the amount and a note commitment. <em>Hidden: who owns the note.</em>', verb: 'Shield', to: null },
+  out: { hint: 'Public: the amount and the receiving account. <em>Hidden: which note paid.</em>', verb: 'Unshield', to: 'To NEAR account' },
+  send: { hint: 'Public: two nullifiers, two commitments. <em>Hidden: sender, recipient, amount.</em>', verb: 'Send in the shade', to: 'To shielded address' },
+};
+
+function setRoute(r: Route) {
+  route = r;
+  document.querySelectorAll<HTMLButtonElement>('.routes button').forEach((b) => b.classList.toggle('active', b.dataset.route === r));
+  $('move-hint').innerHTML = ROUTES[r].hint;
+  $('move-to-wrap').classList.toggle('hidden', !ROUTES[r].to);
+  $('move-to-label').textContent = ROUTES[r].to ?? '';
+  ($('move-to') as HTMLInputElement).placeholder = r === 'send' ? 'antumbra:…' : (signer?.accountId ?? 'name.testnet');
+  $('form-move').dataset.route = r;
+  updateMoveButton();
+}
+
+function updateMoveButton() {
+  const v = ($('move-amount') as HTMLInputElement).value.trim();
+  const sym = tokens.length ? selectedToken('move-token').symbol : '';
+  $('move-submit').textContent = v ? `${ROUTES[route].verb} ${v} ${sym}` : ROUTES[route].verb;
+}
+
+async function doMove(btn: HTMLButtonElement) {
   await busy(btn, async () => {
     const s = requireSigner();
-    const token = ($('deposit-token') as HTMLSelectElement).value;
-    const assetId = deployment.tokens.indexOf(token) + 1;
-    const amount = amountOf('deposit-amount');
-    const d = JSON.parse(wasm.prepare_deposit(walletJson!, assetId, amount, seed()));
-    local.set('pending', JSON.stringify({ describe: `deposit of ${amount} ${assetName(assetId)}` }));
-    setToast('Waiting for the chain…', true);
-    const r = await s.call(token, 'ft_transfer_call', { receiver_id: deployment.pool, amount, msg: d.msg }, GAS_FT, '1');
-    if (r === 'redirect') return;
-    local.del('pending');
-    reportTx(`deposit of ${amount} ${assetName(assetId)}`, r, { amount, commitment: d.commitment });
-    await syncSoon();
+    const t = selectedToken('move-token');
+    const human = ($('move-amount') as HTMLInputElement).value.trim();
+    const amount = toBase(human, t.decimals);
+    const to = ($('move-to') as HTMLInputElement).value.trim();
+    if (route === 'in') {
+      const d = JSON.parse(wasm.prepare_deposit(walletJson!, t.assetId, amount, seed()));
+      const describe = `shielded ${human} ${t.symbol}`;
+      local.set('pending', JSON.stringify({ describe }));
+      setToast('Waiting for the chain…', true);
+      const r = await s.call(t.account, 'ft_transfer_call', { receiver_id: deployment.pool, amount, msg: d.msg }, GAS_FT, '1');
+      if (r === 'redirect') return;
+      local.del('pending');
+      reportTx(describe, r, { amount, commitment: d.commitment });
+      if (r.ok) crossing('in');
+      await syncSoon();
+      void refreshLight();
+    } else if (route === 'out') {
+      const dest = to || s.accountId;
+      await ensureRegistered(t.account, dest);
+      const ok = await proveAndSend('withdraw', { asset_id: t.assetId, amount, to: dest }, `unshielded ${human} ${t.symbol} to ${dest}`);
+      if (ok) crossing('out');
+      void refreshLight();
+    } else {
+      if (!to.startsWith('antumbra:')) throw new Error('enter a shielded address (antumbra:…)');
+      await proveAndSend('transfer', { asset_id: t.assetId, amount, to }, `sent ${human} ${t.symbol} within the shade`);
+    }
   });
 }
 
-async function proveAndSend(btn: HTMLButtonElement, op: string, params: Record<string, unknown>, describe: string) {
+// ---------- swaps ----------
+async function doSwap(btn: HTMLButtonElement) {
   await busy(btn, async () => {
     requireSigner();
-    setToast('Proving in your browser…', true);
-    const { result, ms } = await prepare(op, params);
-    log(`${op} proof built in ${(ms / 1000).toFixed(1)} s, inside a Web Worker`, { geek: true });
-    await sendPrepared(JSON.parse(result), describe);
+    if (!pair) throw new Error('pair not loaded yet');
+    const t = selectedToken('swap-sell');
+    const human = ($('swap-amount') as HTMLInputElement).value.trim();
+    const amount = toBase(human, t.decimals);
+    const e = await chain.currentEpoch();
+    const sealer = await chain.getSealer();
+    if (!sealer) throw new Error('the pool has no sealer registered yet');
+    await proveAndSend('swap', { pair_id: pair.pair_id, asset_1: pair.asset_1, asset_2: pair.asset_2, sell_asset: t.assetId, amount, epoch: e.epoch, pk_x: sealer.pk[0], pk_y: sealer.pk[1] }, `sealed swap of ${human} ${t.symbol} in epoch ${e.epoch}`);
   });
 }
 
-async function doTransfer(btn: HTMLButtonElement) {
-  const asset_id = Number(($('transfer-asset') as HTMLSelectElement).value);
-  const amount = amountOf('transfer-amount');
-  const to = ($('transfer-to') as HTMLInputElement).value.trim();
-  await proveAndSend(btn, 'transfer', { asset_id, amount, to }, `private transfer of ${amount} ${assetName(asset_id)}`);
+async function claimSwap(sw: SwapEntry) {
+  requireSigner();
+  const p = pair ?? (await chain.getPair(deployment.pair_id));
+  if (!p) throw new Error('pair not loaded');
+  const batch = await chain.getBatch(sw.epoch, sw.pair_id);
+  if (!batch?.executed) throw new Error(`epoch ${sw.epoch} is not cleared yet`);
+  setToast('Proving your share in your browser…', true);
+  const { result, ms } = await prepare('claim', { index: sw.index, asset_1: p.asset_1, asset_2: p.asset_2, batch: JSON.stringify(batch) });
+  const r = JSON.parse(result);
+  log(`claim proof for swap #${sw.index} built in ${(ms / 1000).toFixed(1)} s`, { geek: true });
+  const out = r.outputs[0];
+  const refund = Number(r.outputs[1].amount) ? ` plus a refund of ${amountText(r.outputs[1].asset_id, r.outputs[1].amount)}` : '';
+  await sendPrepared(r.prepared, `claimed ${amountText(out.asset_id, out.amount)}${refund}`);
 }
 
-async function doWithdraw(btn: HTMLButtonElement) {
-  const asset_id = Number(($('withdraw-asset') as HTMLSelectElement).value);
-  const amount = amountOf('withdraw-amount');
-  const to = ($('withdraw-to') as HTMLInputElement).value.trim();
-  await proveAndSend(btn, 'withdraw', { asset_id, amount, to }, `withdrawal of ${amount} ${assetName(asset_id)} to ${to}`);
-}
-
-async function doSwap(btn: HTMLButtonElement) {
-  if (!pair) return fail(new Error('pair not loaded yet'));
-  const sell_asset = Number(($('swap-sell') as HTMLSelectElement).value);
-  const amount = amountOf('swap-amount');
-  const e = await chain.currentEpoch();
-  const sealer = await chain.getSealer();
-  if (!sealer) return fail(new Error('the pool has no sealer registered yet'));
-  await proveAndSend(btn, 'swap', { pair_id: pair.pair_id, asset_1: pair.asset_1, asset_2: pair.asset_2, sell_asset, amount, epoch: e.epoch, pk_x: sealer.pk[0], pk_y: sealer.pk[1] }, `sealed swap of ${amount} ${assetName(sell_asset)} in epoch ${e.epoch}`);
+/// With a dev key there is nothing to confirm, so cleared swaps are claimed as soon as the sealer is done.
+async function autoClaim() {
+  if (claiming || !walletJson || signer?.kind !== 'devkey') return;
+  const ready = (summary().swaps as SwapEntry[]).filter((x) => !x.claimed && batchCleared.get(x.epoch));
+  if (ready.length === 0) return;
+  claiming = true;
+  renderWallet();
+  try {
+    for (const sw of ready) await claimSwap(sw);
+  } catch (e) {
+    fail(e);
+  } finally {
+    claiming = false;
+    renderWallet();
+  }
 }
 
 /// Asks OutLayer to clear the last finished epoch inside a TEE (only when the pool is configured for it).
@@ -366,45 +591,6 @@ async function doEndEpoch(btn: HTMLButtonElement) {
   });
 }
 
-async function doClaim(btn: HTMLButtonElement) {
-  await busy(btn, async () => {
-    requireSigner();
-    await sync(false);
-    const summary = JSON.parse(wasm.wallet_summary(walletJson!));
-    const now = await chain.currentEpoch();
-    const p = await chain.getPair(deployment.pair_id);
-    if (!p) throw new Error('pair not loaded');
-    let claimed = 0;
-    for (const sw of summary.swaps) {
-      if (sw.claimed) continue;
-      if (sw.epoch >= now.epoch) { log(`swap #${sw.index} clears when epoch ${sw.epoch} ends (${now.blocks_left} blocks to go)`); continue; }
-      const batch = await chain.getBatch(sw.epoch, sw.pair_id);
-      if (!batch || !batch.executed) {
-        log(`swap #${sw.index}: epoch ${sw.epoch} has ended, waiting for the sealer to clear it (only the sealer can open the amounts)`);
-        continue;
-      }
-      setToast('Proving your share in your browser…', true);
-      const { result, ms } = await prepare('claim', { index: sw.index, asset_1: p.asset_1, asset_2: p.asset_2, batch: JSON.stringify(batch) });
-      const r = JSON.parse(result);
-      log(`claim proof for swap #${sw.index} built in ${(ms / 1000).toFixed(1)} s`, { geek: true });
-      await sendPrepared(r.prepared, `claim of ${r.outputs[0].amount} ${assetName(r.outputs[0].asset_id)}${Number(r.outputs[1].amount) ? ` plus a refund of ${r.outputs[1].amount}` : ''}`);
-      claimed++;
-    }
-    if (claimed === 0) { setToast('Nothing to claim yet.'); setTimeout(() => setToast(''), 4000); }
-  });
-}
-
-async function doMint(btn: HTMLButtonElement) {
-  await busy(btn, async () => {
-    const s = requireSigner();
-    for (const token of deployment.tokens) {
-      const r = await s.call(token, 'mint', { account_id: s.accountId, amount: '1000000' }, 30, '0');
-      if (r === 'redirect') return;
-      reportTx(`minted 1 000 000 ${token.split('.')[0]} to ${s.accountId}`, r);
-    }
-  });
-}
-
 // ---------- signer UI ----------
 function showSigner() {
   $('signer-connected').classList.toggle('hidden', !signer);
@@ -417,6 +603,8 @@ function showSigner() {
   } else {
     pill.textContent = 'choose who pays gas';
   }
+  setRoute(route);
+  void refreshLight();
 }
 
 async function setupSigner() {
@@ -472,32 +660,23 @@ async function main() {
   chain = new Chain(RPC_URLS, deployment.pool);
   ($('pool-link') as HTMLAnchorElement).href = `${EXPLORER}/address/${deployment.pool}`;
   $('pool-id').textContent = deployment.pool;
+  $('pool-id').title = deployment.pool;
   ensureWallet();
-
-  const tokenSelect = $('deposit-token') as HTMLSelectElement;
-  for (const t of deployment.tokens) tokenSelect.add(new Option(assetLabel(deployment.tokens.indexOf(t) + 1), t));
-  for (const id of ['transfer-asset', 'withdraw-asset', 'swap-sell']) {
+  await loadTokens();
+  for (const id of ['move-token', 'swap-sell']) {
     const sel = $(id) as HTMLSelectElement;
-    deployment.tokens.forEach((_, i) => sel.add(new Option(assetLabel(i + 1), String(i + 1))));
+    for (const t of tokens) sel.add(new Option(t.symbol, String(t.assetId)));
   }
 
-  document.querySelectorAll<HTMLButtonElement>('.tabs button').forEach((b) =>
-    b.addEventListener('click', () => {
-      document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('active'));
-      b.classList.add('active');
-      document.querySelectorAll('.tab').forEach((t) => t.classList.add('hidden'));
-      $(`form-${b.dataset.tab}`).classList.remove('hidden');
-    }),
-  );
+  document.querySelectorAll<HTMLButtonElement>('.routes button').forEach((b) => b.addEventListener('click', () => setRoute(b.dataset.route as Route)));
+  $('move-amount').addEventListener('input', updateMoveButton);
+  $('move-token').addEventListener('change', updateMoveButton);
+  $('swap-sell').addEventListener('change', updateSwapBuy);
   const submit = (formId: string, handler: (btn: HTMLButtonElement) => Promise<void>) =>
-    $(formId).addEventListener('submit', (e) => { e.preventDefault(); handler((e.target as HTMLFormElement).querySelector('button[type=submit]')!); });
-  submit('form-deposit', doDeposit);
-  submit('form-transfer', doTransfer);
-  submit('form-withdraw', doWithdraw);
+    $(formId).addEventListener('submit', (e) => { e.preventDefault(); void handler((e.target as HTMLFormElement).querySelector('button[type=submit]')!); });
+  submit('form-move', doMove);
   submit('form-swap', doSwap);
-  $('claim-all').addEventListener('click', () => doClaim($('claim-all') as HTMLButtonElement));
   $('end-epoch').addEventListener('click', () => doEndEpoch($('end-epoch') as HTMLButtonElement));
-  $('mint').addEventListener('click', () => doMint($('mint') as HTMLButtonElement));
   $('sync').addEventListener('click', () => sync());
   const copy = () => { navigator.clipboard.writeText($('address').textContent ?? ''); setToast('Address copied.'); setTimeout(() => setToast(''), 2500); };
   $('copy-address').addEventListener('click', copy);
@@ -517,6 +696,7 @@ async function main() {
   $('reset-wallet').addEventListener('click', () => {
     if (!confirm('Discard this wallet and its notes?')) return;
     saveWallet(wasm.wallet_new(seed()));
+    batchCleared.clear();
     log('new wallet created');
     renderWallet();
   });
@@ -553,6 +733,7 @@ async function main() {
     showSigner();
   });
 
+  setRoute('in');
   await setupSigner();
   await refreshPool();
   await handleRedirectReturn();

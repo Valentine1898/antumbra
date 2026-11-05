@@ -96,23 +96,28 @@ deployment in `deployment.json` through public RPC endpoints (FastNEAR first,
 then two others; each limits requests per IP, so the page fails over). Add
 `?rpc=https://…` to the URL to put your own endpoint first.
 
-1. **Gas payer.** Connect MyNearWallet, or expand "testnet dev key" and press
-   *Create a funded dev account*: a key pair is generated in the browser and
-   the testnet helper service funds a fresh `dev-…testnet` account. Press
-   *Mint 1 000 000 test tokens* to get both test tokens.
-2. **Deposit** 600 000 of token 1. The log shows what went on-chain: the
-   amount and a note commitment. *Sync* finds the note by trial decryption and
-   the shielded balance appears.
-3. **Transfer** 250 000 to a shielded address (your own, from the wallet card,
-   works as a demo). The proof is built in a Web Worker in about three
-   seconds; the log shows the two nullifiers and two commitments the chain saw.
-4. **Withdraw** 100 000 to any NEAR account; **Swap** 100 000 of asset 1 in
-   the current epoch: the amount goes on-chain sealed (Geek mode shows the
-   batch with one entry and no amount). Once the epoch (20 blocks) has ended
-   and the pool's sealer has cleared it (the hosted pool's sealer runs as
-   `antumbra sealer watch`; on your own deployment run it yourself), **Claim**
-   proves your share and mints it as a private note. *Sync* again and the
-   asset-2 balance shows up; withdraw it if you like.
+The page has two realms. **In the light** is your NEAR account and what it
+holds in public; **in the shade** is your shielded balance, which only you can
+see. The testnet pool trades real testnet tokens: `wrap.testnet` (wNEAR) and
+`usdc.fakes.testnet` (USDC.e, the test stablecoin NEAR's DEXes use).
+
+1. **Gas payer.** Connect MyNearWallet, or press *Create a throwaway testnet
+   account*: a key pair is generated in the browser and the testnet helper
+   service funds a fresh `dev-…testnet` account. The light side fills in with
+   its NEAR balance; *wrap 1 NEAR* turns some of it into wNEAR and *get 100
+   USDC.e* mints from the test faucet.
+2. **Into the shade.** Shield 0.5 wNEAR: the amount and a note commitment go
+   on-chain, nothing says who owns the note. A mote of light crosses into the
+   shade and the shielded balance unveils.
+3. **Swap in the shade.** Sell 0.1 wNEAR: the proof is built in a Web Worker
+   in about three seconds and the amount goes on-chain sealed (Geek mode shows
+   the batch with one entry and no amount). When the epoch (20 blocks) ends,
+   the pool's sealer clears it and the swap card turns from *sealed* to
+   *cleared*; with a dev key the page claims your share by itself, with a
+   wallet press *Claim*. The bought USDC.e appears as a private note.
+4. **Out of the shade** sends any amount back to a NEAR account (yours by
+   default); **To another shade** is a private transfer to a shielded address.
+   Every step lists in *Activity* what the chain saw.
 
 Proving keys are regenerated from the seeded setups on first use (about half
 a minute per circuit, once) and cached in IndexedDB. The wallet (keys and
@@ -123,36 +128,44 @@ crates rebuild them with `scripts/build-wasm.sh` (needs `wasm-pack`).
 
 ## Try it on testnet with the CLI
 
-The pool and two test tokens are deployed on NEAR testnet; `deployment.json`
-in the repository root points at them. Build the CLI and run the demo:
+The pool on NEAR testnet trades wNEAR (`wrap.testnet`) and USDC.e
+(`usdc.fakes.testnet`); `deployment.json` in the repository root points at it.
+CLI amounts are base units (yoctoNEAR for wNEAR, millionths for USDC.e).
+Build the CLI and run the demo:
 
 1. `cargo build -p antumbra-cli --release`
 2. `ANTUMBRA_RPC=https://test.rpc.fastnear.com scripts/demo.sh deployment.json`
    This needs a funded testnet account to pay gas: put its id and key in
    `deployment.secret.json` (`{"deployer_account": "...", "deployer_key":
    "ed25519:...", "pool_key": ""}`) or export `ANTUMBRA_ACCOUNT` and
-   `ANTUMBRA_KEY`. The script creates two wallets, deposits, transfers
-   privately, withdraws, swaps, waits for the epoch, claims and withdraws the
-   bought asset, printing gas and the pool state at each step. Test tokens
-   can be minted by anyone with `antumbra mint`.
+   `ANTUMBRA_KEY`. The script wraps 0.7 NEAR of that account into wNEAR,
+   creates two wallets, deposits, transfers privately, withdraws, swaps,
+   waits for the epoch and the sealer, claims and withdraws the bought USDC.e,
+   printing gas and the pool state at each step. On a deployment with test
+   tokens it mints them instead (`antumbra mint` is open to anyone).
 
 Or deploy your own copy and run against it:
 
 ```
 antumbra --network testnet deploy      # dev accounts through the testnet helper, writes deployment.json
 antumbra --wallet alice.json keys-new  # prints a shielded address antumbra:<pk>:<enc>
-antumbra --wallet alice.json deposit --token <token id> --amount 600000
+antumbra --wallet alice.json deposit --token <token id> --amount <base units>
 antumbra --wallet alice.json sync
-antumbra --wallet alice.json transfer --asset 1 --amount 250000 --to antumbra:...
-antumbra --wallet alice.json swap --pair 1 --sell 1 --amount 100000   # amount sealed to the pool's sealer
+antumbra --wallet alice.json transfer --asset 1 --amount <base units> --to antumbra:...
+antumbra --wallet alice.json swap --pair 1 --sell 1 --amount <base units>   # amount sealed to the pool's sealer
 antumbra sealer clear --pair 1        # the pool operator opens finished epochs and submits signed totals
 antumbra --wallet alice.json claim    # once the epoch is cleared
-antumbra --wallet alice.json withdraw --asset 2 --amount 90661 --to <near account>
+antumbra --wallet alice.json withdraw --asset 2 --amount <base units> --to <near account>
 antumbra info
 ```
 
 `antumbra sealer watch --pair 1` keeps clearing epochs as they end; `deploy`
-generates the sealer keys and registers them. To clear epochs inside a TEE
+generates the sealer keys and registers them. `deploy --token wrap.testnet
+--token usdc.fakes.testnet --liquidity <wNEAR base units> --liquidity <USDC.e
+base units>` registers existing NEP-141 tokens instead of deploying test ones
+(the deployer must hold the liquidity: `antumbra wrap --amount <yocto>` wraps
+NEAR, `antumbra mint` works on the fakes); that is how the testnet pool in
+`deployment.json` was made. To clear epochs inside a TEE
 instead, build the sealer program (`cargo build -p antumbra-sealer --target
 wasm32-wasip1 --release`), publish it at an https URL, give the program a
 `PROTECTED_SEALER_SEED` secret in OutLayer, register the same public key
