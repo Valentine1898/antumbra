@@ -127,13 +127,13 @@ impl Plaintext {
     }
 
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        match b.first()? {
-            &TAG_NOTE if b.len() == 1 + 4 + 16 + 32 => Some(Plaintext::Note(NotePlaintext {
+        match *b.first()? {
+            TAG_NOTE if b.len() == 1 + 4 + 16 + 32 => Some(Plaintext::Note(NotePlaintext {
                 asset_id: u32::from_le_bytes(b[1..5].try_into().ok()?),
                 amount: u128::from_le_bytes(b[5..21].try_into().ok()?),
                 rseed: fr_from_bytes(b[21..53].try_into().ok()?)?,
             })),
-            &TAG_SWAP if b.len() == 1 + 8 + 4 + 1 + 16 + 32 => {
+            TAG_SWAP if b.len() == 1 + 8 + 4 + 1 + 16 + 32 => {
                 Some(Plaintext::Swap(SwapPlaintext {
                     epoch: u64::from_le_bytes(b[1..9].try_into().ok()?),
                     pair_id: u32::from_le_bytes(b[9..13].try_into().ok()?),

@@ -40,6 +40,11 @@ Requirements: Rust 1.99 with the `wasm32-unknown-unknown` target (pinned by
 `rust-toolchain.toml`), network access on first run (the NEAR sandbox binary,
 nearcore 2.14.0, is downloaded by `near-workspaces`).
 
+One command runs everything below in order: `scripts/check.sh`. Expect the
+three constraint counts, `all checks passed`, `swap cycle passed` and
+`test result: ok` lines, in about ten minutes on first run (dependencies and
+the sandbox download) and about two minutes after that.
+
 1. `cargo test -p antumbra-core --all-features -p antumbra-circuits --release -- --nocapture`
    Unit tests: gadget-vs-native hash and tree consistency, note encryption,
    AMM arithmetic, and the three circuits (prints `joinsplit constraints:
@@ -61,7 +66,11 @@ nearcore 2.14.0, is downloaded by `near-workspaces`).
    private), the epoch ends and anyone executes the batch (`lambda_2 = 90661`,
    the constant-product output after the 0.3% fee), Alice finds her swap by
    scanning, claims 90 661 of asset 2 as a private note, and withdraws it to
-   her account. Expect `swap cycle passed` and `test result: ok` for both.
+   her account. Along the way the contract rejects a swap that sells the wrong
+   side of the pair, a swap aimed at a future epoch, a claim before the epoch
+   has ended, a replayed claim (`note already spent`) and a valid swap aimed
+   at an already executed batch (`batch already executed`, with the call
+   reverted entirely). Expect `swap cycle passed` and `test result: ok` for both.
 
 The `spike` crates are independent: see [spike results](#spike-results-day-1).
 

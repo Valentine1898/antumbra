@@ -174,7 +174,7 @@ impl WalletFile {
             .filter(|(_, n)| !n.spent && n.asset_id == asset_id)
             .map(|(i, n)| (i, n.amount.parse::<u128>().expect("amount")))
             .collect();
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.1));
         let total: u128 = candidates.iter().map(|c| c.1).sum();
         if total < amount {
             return Err(anyhow!(

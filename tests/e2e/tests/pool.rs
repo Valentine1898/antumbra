@@ -622,6 +622,59 @@ async fn swap_cycle() -> Result<()> {
     assert_eq!(batch["delta_1"], "100000");
     assert_eq!(batch["executed"], false);
 
+    // 3b. Attacks while the epoch is still open (bogus proofs: the contract rejects them before verification).
+    let (bogus_nf, bogus_cm) = (fr_to_hex(&random_fr()), fr_to_hex(&random_fr()));
+    let bogus_proof = b64(&vec![0u8; near_encoding::PROOF_LEN]);
+    let swap_args = |asset_id: u32, epoch_arg: u64| {
+        json!({
+            "proof": bogus_proof, "root": fr_to_hex(&tree::root_of(&leaves)), "asset_id": asset_id,
+            "nullifiers": [bogus_nf, fr_to_hex(&random_fr())],
+            "change_commitment": bogus_cm, "change_ciphertext": "", "swap_commitment": bogus_cm, "swap_ciphertext": "",
+            "epoch": epoch_arg, "pair_id": pair_id, "direction": DIR_1_TO_2, "delta": "1",
+        })
+    };
+    // Selling asset 2 while claiming direction 1 (asset 1 is the sold side).
+    let r = alice
+        .call(pool.id(), "swap")
+        .args_json(swap_args(2, epoch))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(
+        r.is_failure() && failure_text(&r).contains("does not match the pair side"),
+        "{}",
+        failure_text(&r)
+    );
+    // A swap declared for a future epoch.
+    let r = alice
+        .call(pool.id(), "swap")
+        .args_json(swap_args(1, epoch + 1000))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(
+        r.is_failure() && failure_text(&r).contains("future epoch"),
+        "{}",
+        failure_text(&r)
+    );
+    // Claiming an epoch that has not ended (far in the future, since the sandbox mints
+    // blocks in milliseconds): the batch cannot be executed yet.
+    let r = alice
+        .call(pool.id(), "swap_claim")
+        .args_json(json!({
+            "proof": bogus_proof, "root": fr_to_hex(&tree::root_of(&leaves)), "nullifier": bogus_nf,
+            "commitments": [bogus_cm, fr_to_hex(&random_fr())], "ciphertexts": ["", ""],
+            "epoch": epoch + 1000, "pair_id": pair_id,
+        }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(
+        r.is_failure() && failure_text(&r).contains("epoch not finished"),
+        "{}",
+        failure_text(&r)
+    );
+
     // 4. The epoch ends; anyone executes the batch at one clearing price.
     chain.worker.fast_forward(EPOCH_BLOCKS + 1).await?;
     let r = chain
@@ -687,6 +740,87 @@ async fn swap_cycle() -> Result<()> {
     gas("swap_claim", &r);
     r.into_result()?;
     leaves.extend([outputs[0].commitment(), outputs[1].commitment()]);
+
+    // 5b. Attacks after the claim.
+    // Replaying the same claim: the swap nullifier is spent.
+    let r = alice
+        .call(pool.id(), "swap_claim")
+        .args_json(json!({
+            "proof": b64(&near_encoding::proof_bytes(&proof)),
+            "root": fr_to_hex(&public.root),
+            "nullifier": fr_to_hex(&public.nullifier),
+            "commitments": [fr_to_hex(&public.commitments[0]), fr_to_hex(&public.commitments[1])],
+            "ciphertexts": ["", ""],
+            "epoch": epoch, "pair_id": pair_id,
+        }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(
+        r.is_failure() && failure_text(&r).contains("already spent"),
+        "{}",
+        failure_text(&r)
+    );
+    // A valid swap aimed at the executed epoch is refused: the batch is closed, and the call reverts entirely.
+    wa.scan(&fetch_leaves(pool).await?);
+    let (c_note, c_pos) = wa.note_of(1, 500_000);
+    let late_inputs = [
+        InputWitness {
+            note: c_note,
+            sk: wa.sk,
+            position: c_pos,
+            siblings: tree::merkle_path(&leaves, c_pos),
+        },
+        InputWitness::dummy(1, random_fr()),
+    ];
+    let late_change = wa.make_note(1, 400_000);
+    let late_swap = SwapRecord {
+        epoch,
+        pair_id,
+        direction: DIR_1_TO_2,
+        delta: 100_000,
+        claim_pk: wa.pk(),
+        rseed: random_fr(),
+    };
+    let late = SwapCircuit::new(
+        tree::root_of(&leaves),
+        1,
+        late_inputs,
+        late_change,
+        late_swap,
+    );
+    let late_public = late.public.clone();
+    let late_proof = keys::prove(&sw_pk, late, rand::random());
+    let r = alice
+        .call(pool.id(), "swap")
+        .args_json(json!({
+            "proof": b64(&near_encoding::proof_bytes(&late_proof)),
+            "root": fr_to_hex(&late_public.root),
+            "asset_id": 1,
+            "nullifiers": [fr_to_hex(&late_public.nullifiers[0]), fr_to_hex(&late_public.nullifiers[1])],
+            "change_commitment": fr_to_hex(&late_public.change_commitment),
+            "change_ciphertext": b64(&wa.seal_note(&late_change)),
+            "swap_commitment": fr_to_hex(&late_public.swap_commitment),
+            "swap_ciphertext": b64(&wa.seal_swap(&late_swap)),
+            "epoch": epoch, "pair_id": pair_id, "direction": DIR_1_TO_2, "delta": "100000",
+        }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(
+        r.is_failure() && failure_text(&r).contains("batch already executed"),
+        "{}",
+        failure_text(&r)
+    );
+    assert_eq!(
+        pool.view("leaf_count").await?.json::<u64>()?,
+        leaves.len() as u64
+    );
+    assert!(!pool
+        .view("is_spent")
+        .args_json(json!({"nullifier": fr_to_hex(&late_public.nullifiers[0])}))
+        .await?
+        .json::<bool>()?);
 
     // 6. The bought asset is an ordinary shielded note: withdraw it.
     wa.scan(&fetch_leaves(pool).await?);

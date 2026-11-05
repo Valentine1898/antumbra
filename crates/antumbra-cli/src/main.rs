@@ -11,7 +11,10 @@ use clap::{Parser, Subcommand};
 use near_workspaces::{types::NearToken, Account, Contract};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Parser)]
 #[command(
@@ -175,13 +178,13 @@ struct Secrets {
     pool_key: String,
 }
 
-fn load_deployment(path: &PathBuf) -> Option<Deployment> {
+fn load_deployment(path: &Path) -> Option<Deployment> {
     fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
 }
 
-fn load_secrets(path: &PathBuf) -> Option<Secrets> {
+fn load_secrets(path: &Path) -> Option<Secrets> {
     let secret_path = path.with_extension("secret.json");
     fs::read_to_string(secret_path)
         .ok()
@@ -404,7 +407,7 @@ async fn main() -> Result<()> {
 async fn deploy(
     cli: &Cli,
     n_tokens: u32,
-    wasm_dir: &PathBuf,
+    wasm_dir: &Path,
     mint: u128,
     liquidity: u128,
 ) -> Result<()> {

@@ -72,10 +72,10 @@ impl Frontier {
         let position = self.next_index;
         let mut idx = position;
         let mut cur = leaf;
-        for level in 0..TREE_DEPTH {
+        for (level, zero) in z.iter().enumerate().take(TREE_DEPTH) {
             if idx & 1 == 0 {
                 self.filled[level] = fr_to_bytes(&cur);
-                cur = hash2(cur, z[level]);
+                cur = hash2(cur, *zero);
             } else {
                 let left = fr_from_bytes(&self.filled[level]).expect("stored node is canonical");
                 cur = hash2(left, cur);
@@ -95,16 +95,12 @@ pub fn merkle_path(leaves: &[Fr], position: u64) -> Vec<Fr> {
     let mut siblings = Vec::with_capacity(TREE_DEPTH);
     let mut level: Vec<Fr> = leaves.to_vec();
     let mut idx = position as usize;
-    for height in 0..TREE_DEPTH {
+    for zero in z.iter().take(TREE_DEPTH) {
         let sib = idx ^ 1;
-        siblings.push(if sib < level.len() {
-            level[sib]
-        } else {
-            z[height]
-        });
+        siblings.push(if sib < level.len() { level[sib] } else { *zero });
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         for pair in level.chunks(2) {
-            let right = if pair.len() == 2 { pair[1] } else { z[height] };
+            let right = if pair.len() == 2 { pair[1] } else { *zero };
             next.push(hash2(pair[0], right));
         }
         level = next;
@@ -120,10 +116,10 @@ pub fn root_of(leaves: &[Fr]) -> Fr {
     }
     let z = zeros();
     let mut level: Vec<Fr> = leaves.to_vec();
-    for height in 0..TREE_DEPTH {
+    for zero in z.iter().take(TREE_DEPTH) {
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         for pair in level.chunks(2) {
-            let right = if pair.len() == 2 { pair[1] } else { z[height] };
+            let right = if pair.len() == 2 { pair[1] } else { *zero };
             next.push(hash2(pair[0], right));
         }
         level = next;

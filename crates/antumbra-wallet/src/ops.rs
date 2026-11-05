@@ -215,6 +215,7 @@ fn inputs_for(
     Ok((arr, total))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn submit_joinsplit(
     wallet: &mut WalletFile,
     chain: &Chain,
