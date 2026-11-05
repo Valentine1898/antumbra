@@ -215,10 +215,43 @@ unchanged: the claimer already knows their own `delta`. What stays public per
 swap: the sold side (`asset_id` and `direction`), the nullifiers and the
 commitments. What became private: the amount.
 
+## Routing a batch through NEAR Intents
+
+A cleared batch is two totals, `delta_1` and `delta_2`. The two directions
+net against each other; only the imbalance needs outside liquidity, and that
+is what gets routed. `antumbra-wallet/src/route.rs` implements the pricing:
+
+1. Take the reference price `p0 = price_1 / price_2` from the 1Click token
+   list and find the surplus side: `delta_1 - delta_2 / p0` of asset 1, or
+   `delta_2 - delta_1 * p0` of asset 2.
+2. Ask 1Click for an `EXACT_INPUT` quote of that net leg. The quote shape is
+   the one a NEAR-resident pool uses: balances inside the NEAR Intents
+   contract on both sides (`depositType`, `recipientType`, `refundType` =
+   `INTENTS`), executed as a signed intent. Same-chain quotes with an
+   on-chain deposit are not offered for NEAR pairs.
+3. The quote sets the clearing price `p` for everyone in the batch:
+   `lambda_2 = delta_1 * p`, `lambda_1 = delta_2 / p`. The matched part never
+   leaves the pool; only the net leg does.
+
+Mainnet path (designed, not implemented, since 1Click has no testnet): the
+pool keeps its reserves inside `intents.near` and registers the executor's
+key on that account (`add_public_key`), so the executor can sign intents for
+the pool. Clearing becomes `end_epoch_routed(epoch, pair, totals, quote,
+signature)`: the contract records the totals and moves the net leg into its
+Intents balance; the executor submits the signed intent; when 1Click
+settles, the contract withdraws the bought side (`ft_withdraw`) and, in the
+callback, publishes `BatchSwapOutputData` at the fill price. The amount the
+contract receives is what it publishes, so a dishonest executor cannot
+inflate the output. Confidential quotes (`confidentiality: basic`) require a
+1Click JWT; the router sends the flag whenever `ONECLICK_JWT` is set.
+
+What exists today: `antumbra route quote` and `antumbra route plan`, the
+`--route` flag of `antumbra sealer clear`, and a live quote on the swap page
+of the web wallet, all dry runs with real mainnet prices against the testnet
+pool.
+
 ## Stretch, in order
 
-1. Route the net batch through NEAR Intents (1Click, confidential) instead of
-   the internal pool, so liquidity comes from the solver network.
+1. Settle routed batches on mainnet (the contract path above).
 2. Hide the sold side as well (a two-asset join-split), so a swap reveals
    nothing but its existence.
-3. Web UI with a wasm prover (done, see `web/`).

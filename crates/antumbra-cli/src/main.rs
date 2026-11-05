@@ -4,6 +4,7 @@
 use antumbra_wallet::{
     chain::{describe, ensure_ok},
     ops::{self, ClaimOutcome},
+    route::{self, OneClick, RoutePlan, Side},
     Address, Chain, ProvingKeys, WalletFile,
 };
 use anyhow::{anyhow, Context, Result};
@@ -127,6 +128,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SealerCmd,
     },
+    /// Routing through NEAR Intents (1Click): live mainnet quotes for a swap or
+    /// a whole batch. A dry run against the testnet pool; nothing moves.
+    Route {
+        #[command(subcommand)]
+        cmd: RouteCmd,
+    },
     /// Deploy the pool, register tokens, seed liquidity, write deployment.json.
     /// With --account/--key the contracts go to fresh subaccounts of that funded
     /// account (works on testnet and on a local sandbox); without them a testnet
@@ -192,6 +199,28 @@ struct Deployment {
 }
 
 #[derive(Subcommand)]
+enum RouteCmd {
+    /// Quote one amount of an asset against the other side of its pair.
+    Quote {
+        #[arg(long, default_value_t = 1)]
+        pair: u32,
+        #[arg(long)]
+        sell: u32,
+        /// Base units.
+        #[arg(long)]
+        amount: u128,
+    },
+    /// How a cleared batch would have cleared through NEAR Intents: the two
+    /// directions net against each other, only the imbalance is quoted.
+    Plan {
+        #[arg(long, default_value_t = 1)]
+        pair: u32,
+        #[arg(long)]
+        epoch: u64,
+    },
+}
+
+#[derive(Subcommand)]
 enum SealerCmd {
     /// Print the sealer's public key and the executor's public key.
     Pubkey,
@@ -215,6 +244,9 @@ enum SealerCmd {
         epoch: Option<u64>,
         #[arg(long, default_value_t = 50)]
         lookback: u64,
+        /// Also price each cleared batch on NEAR Intents (dry run).
+        #[arg(long)]
+        route: bool,
     },
     /// Keep clearing finished epochs as they end. Each tick is one view call
     /// per epoch in the lookback window, so keep the window small on public RPCs.
@@ -419,6 +451,7 @@ async fn main() -> Result<()> {
             println!("after the epoch ends the sealer clears it (`antumbra sealer clear --pair {pair}`), then `antumbra claim`");
         }
         Cmd::Sealer { cmd } => sealer_cmd(&cli, cmd).await?,
+        Cmd::Route { cmd } => route_cmd(&cli, cmd).await?,
         Cmd::Claim => {
             let mut w = cli.wallet()?;
             let chain = cli.chain().await?;
@@ -713,6 +746,151 @@ async fn deploy(
     Ok(())
 }
 
+async fn route_cmd(cli: &Cli, cmd: &RouteCmd) -> Result<()> {
+    match cmd {
+        RouteCmd::Quote { pair, sell, amount } => {
+            let chain = cli.chain().await?;
+            let sides = pair_sides(&chain, *pair).await?;
+            let p = chain
+                .get_pair(*pair)
+                .await?
+                .ok_or_else(|| anyhow!("no pair {pair}"))?;
+            let (delta_1, delta_2) = if *sell == p.asset_1 {
+                (*amount, 0)
+            } else if *sell == p.asset_2 {
+                (0, *amount)
+            } else {
+                return Err(anyhow!("asset {sell} is not a side of pair {pair}"));
+            };
+            let plan = route::plan(
+                &OneClick::new(),
+                (&sides.0, &sides.1),
+                delta_1,
+                delta_2,
+                chain.pool.as_str(),
+            )
+            .await?;
+            print_plan(&plan, &sides, 0);
+        }
+        RouteCmd::Plan { pair, epoch } => {
+            let chain = cli.chain().await?;
+            let sides = pair_sides(&chain, *pair).await?;
+            let b = chain
+                .get_batch(*epoch, *pair)
+                .await?
+                .ok_or_else(|| anyhow!("no batch for epoch {epoch}, pair {pair}"))?;
+            if !b.executed {
+                return Err(anyhow!("epoch {epoch} is not cleared yet; the sealer has to open it first (or use `sealer clear --route`)"));
+            }
+            let (delta_1, delta_2): (u128, u128) = (b.delta_1.parse()?, b.delta_2.parse()?);
+            let plan = route::plan(
+                &OneClick::new(),
+                (&sides.0, &sides.1),
+                delta_1,
+                delta_2,
+                chain.pool.as_str(),
+            )
+            .await?;
+            print_plan(&plan, &sides, *epoch);
+            let (l1, l2): (u128, u128) = (b.lambda_1.parse()?, b.lambda_2.parse()?);
+            println!(
+                "  the internal pool cleared it at {} {} and {} {} out",
+                units(l2, sides.1.decimals),
+                sides.1.symbol,
+                units(l1, sides.0.decimals),
+                sides.0.symbol
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The two sides of a pair as the router sees them: symbol and decimals from
+/// NEP-148 metadata, or a plain name for a test token without any.
+async fn pair_sides(chain: &Chain, pair_id: u32) -> Result<(Side, Side)> {
+    let p = chain
+        .get_pair(pair_id)
+        .await?
+        .ok_or_else(|| anyhow!("no pair {pair_id}"))?;
+    let mut out = vec![];
+    for asset in [p.asset_1, p.asset_2] {
+        let token = chain
+            .get_token(asset)
+            .await?
+            .ok_or_else(|| anyhow!("no token for asset {asset}"))?;
+        let meta = chain.ft_metadata(&token).await?;
+        out.push(Side {
+            symbol: meta
+                .as_ref()
+                .and_then(|m| m.get("symbol").and_then(|s| s.as_str()).map(String::from))
+                .unwrap_or_else(|| format!("TEST{asset}")),
+            decimals: meta
+                .as_ref()
+                .and_then(|m| m.get("decimals").and_then(|d| d.as_u64()))
+                .unwrap_or(0) as u32,
+        });
+    }
+    let b = out.pop().unwrap();
+    let a = out.pop().unwrap();
+    Ok((a, b))
+}
+
+fn units(base: u128, decimals: u32) -> String {
+    let s = format!("{:.6}", base as f64 / 10f64.powi(decimals as i32));
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn print_plan(plan: &RoutePlan, sides: &(Side, Side), epoch: u64) {
+    let (a, b) = sides;
+    println!(
+        "NEAR Intents route{} (dry run, live mainnet quote{}):",
+        if epoch > 0 {
+            format!(" for epoch {epoch}")
+        } else {
+            String::new()
+        },
+        if plan.confidential {
+            ", confidential"
+        } else {
+            "; set ONECLICK_JWT for a confidential quote"
+        }
+    );
+    println!(
+        "  sold in the batch: {} {} and {} {}",
+        units(plan.delta_1, a.decimals),
+        a.symbol,
+        units(plan.delta_2, b.decimals),
+        b.symbol
+    );
+    match &plan.leg {
+        Some(leg) => println!(
+            "  net leg: sell {} {} on NEAR Intents for {} {} (at least {}, about {} s)",
+            units(leg.amount, leg.sell.decimals),
+            leg.sell.symbol,
+            units(leg.quote.amount_out.parse().unwrap_or(0), leg.buy.decimals),
+            leg.buy.symbol,
+            units(
+                leg.quote.min_amount_out.parse().unwrap_or(0),
+                leg.buy.decimals
+            ),
+            leg.quote.time_estimate
+        ),
+        None => println!("  net leg: none, {}", plan.note),
+    }
+    println!(
+        "  clearing price: {:.6} {} per {}; sellers of {} share {} {}, sellers of {} share {} {}",
+        plan.price,
+        b.symbol,
+        a.symbol,
+        a.symbol,
+        units(plan.lambda_2, b.decimals),
+        b.symbol,
+        b.symbol,
+        units(plan.lambda_1, a.decimals),
+        a.symbol
+    );
+}
+
 /// Writes `<deployment>.secret.json`; called as soon as accounts exist and again once the sealer is known.
 fn save_secrets(
     cli: &Cli,
@@ -818,6 +996,7 @@ async fn sealer_cmd(cli: &Cli, cmd: &SealerCmd) -> Result<()> {
             pair,
             epoch,
             lookback,
+            route,
         } => {
             let chain = cli.chain().await?;
             let secrets = sealer_secrets(&sec)?;
@@ -833,6 +1012,18 @@ async fn sealer_cmd(cli: &Cli, cmd: &SealerCmd) -> Result<()> {
                     "epoch {} cleared: {} sealed swaps, totals {} / {} | {}",
                     c.epoch, c.entries, c.delta_1, c.delta_2, c.summary
                 );
+                if *route {
+                    let sides = pair_sides(&chain, *pair).await?;
+                    let plan = route::plan(
+                        &OneClick::new(),
+                        (&sides.0, &sides.1),
+                        c.delta_1,
+                        c.delta_2,
+                        chain.pool.as_str(),
+                    )
+                    .await?;
+                    print_plan(&plan, &sides, c.epoch);
+                }
             }
         }
         SealerCmd::Watch {

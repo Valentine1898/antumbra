@@ -14,11 +14,11 @@ the log panel; the CLI (`scripts/demo.sh`) is the fallback.
    join-split, swap, swap claim."
 2. **Repo (20 s).** Scroll the README status table and `docs/DESIGN.md`
    headings. Mention the gas table.
-3. **The two realms and the gas payer (20 s).** The page is split: *in the
-   light* (your NEAR account, public) and *in the shade* (your shielded
-   balance, only you can see it). Create a funded testnet dev account in one
-   click (key generated in the browser); the light side fills in. Press *wrap
-   1 NEAR* and *get 100 USDC.e*: real testnet tokens, wNEAR and USDC.e.
+3. **The ledger and the gas payer (20 s).** Every token has a lit part (*in
+   the light*, what NEAR sees) and a shaded part (*in the shade*, only you can
+   see it), with the terminator between them. Create a funded testnet dev
+   account in one click (key generated in the browser); the lit side fills
+   in. Press *wrap 1 NEAR* and *get 100 USDC.e*: real testnet tokens.
 4. **Into the shade, and a private transfer (45 s).** Shield 0.5 wNEAR: a
    mote of light crosses the seam, the shielded balance unveils; the log shows
    the public amount and commitment, the explorer shows an `ft_transfer_call`
@@ -27,8 +27,9 @@ the log panel; the CLI (`scripts/demo.sh`) is the fallback.
    Bob, copy its address). In Bob's window press Sync: the note is found by
    trial decryption. The log and the explorer show two nullifiers and two
    commitments, nothing else.
-5. **Swap in the shade (45 s).** Sell 0.1 wNEAR: the proof is built in the
-   browser in about three seconds. Explain: the chain stores a commitment and
+5. **Swap page (45 s).** Type 0.1 wNEAR: the page shows the live NEAR Intents
+   quote for the batch's net leg (mainnet prices, dry run). Seal and swap: the
+   proof is built in the browser in about three seconds. Explain: the chain stores a commitment and
    a ciphertext only the sealer can open; Geek mode shows the batch with one
    sealed entry and no amount. The swap card says *sealed*; when the epoch
    ends the sealer clears it (`antumbra sealer watch` in a terminal, or the

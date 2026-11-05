@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet" />
   </head>
-  <body data-mode="calm">
+  <body data-mode="calm" data-page="threshold">
     <div class="umbra" aria-hidden="true">
       <i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i>
       <i class="disc"></i>
@@ -17,7 +17,11 @@
     <div class="grain" aria-hidden="true"></div>
 
     <header class="bar">
-      <a class="wordmark" href="/"><span class="eclipse" aria-hidden="true"></span>Antumbra</a>
+      <a class="wordmark" href="#threshold"><span class="eclipse" aria-hidden="true"></span>Antumbra</a>
+      <nav class="pages" aria-label="Pages">
+        <a href="#threshold" data-page="threshold" class="active">Threshold</a>
+        <a href="#swap" data-page="swap">Swap</a>
+      </nav>
       <div class="bar-right">
         <button id="signer-pill" class="pill" title="Who pays gas for your transactions">choose who pays gas</button>
         <label class="mode" title="Calm hides the machinery; Geek shows everything the chain sees">
@@ -30,32 +34,33 @@
     </header>
 
     <main class="stage">
-      <!-- Two realms: what NEAR can see, and what only you can see. -->
-      <section class="realms reveal">
-        <article class="realm light">
-          <p class="eyebrow">In the light <span class="muted">· what NEAR sees</span></p>
-          <div id="light-account" class="realm-title mono"></div>
-          <div id="light-balances" class="pub-balances"></div>
-        </article>
-        <i class="seam" aria-hidden="true"></i>
-        <i id="crossing" class="crossing" aria-hidden="true"></i>
-        <article class="realm shade">
-          <p class="eyebrow">In the shade <span class="muted">· only you can see this</span></p>
-          <div id="balances" class="balances"></div>
-          <div class="hero-foot">
-            <button id="sync" class="icon-btn" title="Sync with the pool" aria-label="Sync">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
-            </button>
-            <span id="sync-status" class="muted"></span>
-            <span class="spacer"></span>
-            <span class="addr"><span class="muted">your address</span> <code id="address-short" title="click to copy"></code></span>
+      <!-- The ledger: every token has a lit part NEAR can see and a shaded part only you can see. -->
+      <section class="ledger reveal">
+        <div class="ledger-head">
+          <div class="side light">
+            <p class="eyebrow">In the light <span class="muted">· what NEAR sees</span></p>
+            <div id="light-account" class="who mono"></div>
           </div>
-        </article>
+          <div class="side shade">
+            <p class="eyebrow">In the shade <span class="muted">· only you can see this</span></p>
+            <div class="who"><code id="address-short" title="click to copy"></code></div>
+          </div>
+        </div>
+        <i id="crossing" class="crossing" aria-hidden="true"></i>
+        <div id="ledger-rows" class="ledger-rows"></div>
+        <div class="ledger-foot">
+          <div id="light-actions" class="row"></div>
+          <span class="spacer"></span>
+          <span id="sync-status" class="muted small"></span>
+          <button id="sync" class="icon-btn" title="Sync with the pool" aria-label="Sync">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+          </button>
+        </div>
       </section>
       <p id="toast" class="toast" aria-live="polite"></p>
 
-      <div class="two">
-        <!-- The threshold: everything that crosses between the realms, or moves inside the shade. -->
+      <!-- Page: the threshold. Everything that crosses between the realms, or moves inside the shade. -->
+      <section id="page-threshold" class="page">
         <section class="panel threshold reveal">
           <nav class="routes" aria-label="Direction">
             <button data-route="in" class="active"><span class="arrow">→</span>Into the shade</button>
@@ -72,22 +77,31 @@
             <button type="submit" id="move-submit" class="primary">Shield</button>
           </form>
         </section>
+      </section>
 
-        <section class="panel swapdeck reveal">
-          <div class="panel-head"><h3>Swap in the shade</h3><span id="epoch-pill" class="muted small mono"></span></div>
-          <form id="form-swap">
-            <p class="hint">The amount is sealed; only the sealer opens it to clear the epoch. <em>Hidden: who swaps, and how much.</em> One price for everyone in the epoch.</p>
-            <div class="fields">
-              <label>Sell <input id="swap-amount" inputmode="decimal" placeholder="0.1" autocomplete="off" /></label>
-              <label>Token <select id="swap-sell"></select></label>
-            </div>
-            <p class="muted small">You get <strong id="swap-buy"></strong> at the clearing price of epoch <span id="swap-epoch" class="mono"></span>, <span id="swap-left" class="mono"></span> blocks from now.</p>
-            <div class="bar-track"><div id="epoch-bar" class="bar-fill"></div></div>
-            <button type="submit" class="primary">Seal and swap</button>
-          </form>
-          <div id="swaps" class="swap-cards"></div>
-        </section>
-      </div>
+      <!-- Page: swaps in the shade. -->
+      <section id="page-swap" class="page hidden">
+        <div class="two">
+          <section class="panel swapdeck reveal">
+            <div class="panel-head"><h3>Swap in the shade</h3><span id="epoch-pill" class="muted small mono"></span></div>
+            <form id="form-swap">
+              <p class="hint">The amount is sealed; only the sealer opens it to clear the epoch. <em>Hidden: who swaps, and how much.</em> One price for everyone in the epoch.</p>
+              <div class="fields">
+                <label>Sell <input id="swap-amount" inputmode="decimal" placeholder="0.1" autocomplete="off" /></label>
+                <label>Token <select id="swap-sell"></select></label>
+              </div>
+              <p class="muted small">You get <strong id="swap-buy"></strong> at the clearing price of epoch <span id="swap-epoch" class="mono"></span>, <span id="swap-left" class="mono"></span> blocks from now.</p>
+              <div class="bar-track"><div id="epoch-bar" class="bar-fill"></div></div>
+              <p id="route-quote" class="muted small route-quote"></p>
+              <button type="submit" class="primary">Seal and swap</button>
+            </form>
+          </section>
+          <section class="panel reveal">
+            <div class="panel-head"><h3>Your swaps</h3><span class="muted small">sealed → cleared → claimed</span></div>
+            <div id="swaps" class="swap-cards"></div>
+          </section>
+        </div>
+      </section>
 
       <section class="panel activity reveal">
         <div class="panel-head"><h3>Activity</h3><span id="keys-status" class="muted small"></span></div>

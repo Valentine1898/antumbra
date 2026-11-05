@@ -16,6 +16,7 @@ const STORAGE_DEPOSIT = '2500000000000000000000';
 const ONE_NEAR = '1000000000000000000000000';
 
 type Route = 'in' | 'out' | 'send';
+type Page = 'threshold' | 'swap';
 interface Token { assetId: number; account: string; symbol: string; decimals: number; wrapsNear: boolean }
 interface SwapEntry { index: number; epoch: number; pair_id: number; direction: number; delta: string; position: number; claimed: boolean }
 
@@ -35,12 +36,26 @@ let claiming = false;
 let tick = 0;
 /// For each epoch of a pending swap: whether the sealer has cleared its batch.
 const batchCleared = new Map<number, boolean>();
+/// What the gas payer holds in public: token account → base units, plus NEAR.
+let publicBalances: Record<string, string> = {};
+let nearBalance: string | null = null;
 
-// ---------- mode ----------
+// ---------- mode and pages ----------
 function setMode(mode: 'calm' | 'geek') {
   document.body.dataset.mode = mode;
   ($('mode-toggle') as HTMLInputElement).checked = mode === 'geek';
   local.set('mode', mode);
+}
+
+function pageFromHash(): Page {
+  return location.hash === '#swap' ? 'swap' : 'threshold';
+}
+
+function setPage(p: Page) {
+  document.body.dataset.page = p;
+  $('page-threshold').classList.toggle('hidden', p !== 'threshold');
+  $('page-swap').classList.toggle('hidden', p !== 'swap');
+  document.querySelectorAll<HTMLAnchorElement>('.pages a').forEach((a) => a.classList.toggle('active', a.dataset.page === p));
 }
 
 // ---------- log and toast ----------
@@ -187,8 +202,86 @@ function summary(): any {
   return JSON.parse(wasm.wallet_summary(walletJson!));
 }
 
+// ---------- the ledger: every token's lit part and shaded part ----------
+interface LedgerRow { el: HTMLElement; lit: HTMLElement; shaded: HTMLElement; part: HTMLElement; edge: HTMLElement; pct: HTMLElement }
+const ledgerRows = new Map<number, LedgerRow>();
+
+function ledgerRow(t: Token): LedgerRow {
+  let row = ledgerRows.get(t.assetId);
+  if (row) return row;
+  const el = document.createElement('div');
+  el.className = 'lrow';
+  el.innerHTML =
+    `<div class="lit"><span class="amount"></span><span class="sym">${t.symbol}</span></div>` +
+    `<div class="term" title="how much of this token is in the light and how much is in the shade"><div class="track"><i class="lit-part"></i></div><i class="edge"></i><span class="pct"></span></div>` +
+    `<div class="shaded"><span class="amount"></span><span class="sym">${t.symbol}</span></div>`;
+  row = {
+    el,
+    lit: el.querySelector('.lit .amount')!,
+    shaded: el.querySelector('.shaded .amount')!,
+    part: el.querySelector('.lit-part')!,
+    edge: el.querySelector('.edge')!,
+    pct: el.querySelector('.pct')!,
+  };
+  ledgerRows.set(t.assetId, row);
+  $('ledger-rows').appendChild(el);
+  return row;
+}
+
+let lastActions = '';
+function renderLedger() {
+  $('light-account').textContent = signer
+    ? `${signer.accountId}${nearBalance ? ` · ${fromBase(nearBalance, 24, 2)} NEAR for gas` : ''}`
+    : 'nobody is paying gas yet; choose who does (top right) and this side fills in';
+  const shade = new Map<number, bigint>();
+  if (walletJson) for (const x of summary().balances) shade.set(x.asset_id, BigInt(x.amount));
+  for (const t of tokens) {
+    const row = ledgerRow(t);
+    const lit = BigInt(publicBalances[t.account] ?? '0');
+    const sh = shade.get(t.assetId) ?? 0n;
+    const total = lit + sh;
+    row.lit.textContent = signer ? fromBase(lit, t.decimals) : '·';
+    row.shaded.textContent = fromBase(sh, t.decimals);
+    const litShare = total === 0n ? 0 : Number((lit * 1000n) / total) / 1000;
+    row.part.style.width = `${(litShare * 100).toFixed(1)}%`;
+    row.edge.style.left = `${(litShare * 100).toFixed(1)}%`;
+    row.pct.textContent = total === 0n ? '' : `${Math.round((1 - litShare) * 100)}% in the shade`;
+    row.el.classList.toggle('empty', total === 0n);
+  }
+  const actionsKey = `${signer?.accountId ?? ''}|${tokens.map((t) => t.symbol).join()}`;
+  if (actionsKey !== lastActions) {
+    lastActions = actionsKey;
+    const acts = $('light-actions');
+    acts.innerHTML = '';
+    if (signer) {
+      for (const t of tokens) {
+        const btn = document.createElement('button');
+        btn.className = 'ghost tiny';
+        btn.textContent = t.wrapsNear ? 'wrap 1 NEAR' : `get 100 ${t.symbol}`;
+        btn.addEventListener('click', () => void busy(btn, () => (t.wrapsNear ? wrapNear(t) : mintTest(t))));
+        acts.appendChild(btn);
+      }
+    }
+  }
+}
+
+async function refreshLight() {
+  if (!signer) {
+    nearBalance = null;
+    publicBalances = {};
+    renderLedger();
+    return;
+  }
+  const [near, ...bals] = await Promise.all([
+    chain.nearBalance(signer.accountId).catch(() => '0'),
+    ...tokens.map((t) => chain.ftBalance(t.account, signer!.accountId).catch(() => '0')),
+  ]);
+  nearBalance = near;
+  tokens.forEach((t, i) => { publicBalances[t.account] = bals[i]; });
+  renderLedger();
+}
+
 let lastRender = '';
-let lastBalances = '';
 function renderWallet() {
   if (!walletJson) return;
   const summaryJson = wasm.wallet_summary(walletJson);
@@ -198,22 +291,7 @@ function renderWallet() {
   const s = JSON.parse(summaryJson);
   $('address').textContent = s.address;
   $('address-short').textContent = shortAddress(s.address);
-
-  // Balances re-render (and unveil again) only when they change.
-  const balancesKey = JSON.stringify(s.balances) + tokens.map((t) => t.symbol).join();
-  if (balancesKey !== lastBalances) {
-    lastBalances = balancesKey;
-    const b = $('balances');
-    b.innerHTML = '';
-    if (s.balances.length === 0) b.innerHTML = '<div class="balance empty"><span class="amount">nothing in the shade yet</span></div>';
-    for (const x of s.balances) {
-      const t = token(x.asset_id);
-      const row = document.createElement('div');
-      row.className = 'balance';
-      row.innerHTML = `<span class="amount">${fromBase(x.amount, t.decimals)}</span><span class="asset">${t.symbol}</span>`;
-      b.appendChild(row);
-    }
-  }
+  renderLedger();
 
   const sw = $('swaps');
   sw.innerHTML = '';
@@ -296,49 +374,7 @@ async function syncSoon() {
   setTimeout(() => void sync(false), 4000);
 }
 
-// ---------- the light: what the gas payer holds in public ----------
-let lastLight = '';
-function pubRow(amount: string, symbol: string, act: { label: string; run: () => Promise<void> } | null): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'pub-row';
-  row.innerHTML = `<span class="pub-amount">${amount}</span><span class="pub-symbol">${symbol}</span><span class="spacer"></span>`;
-  if (act) {
-    const btn = document.createElement('button');
-    btn.className = 'ghost tiny';
-    btn.textContent = act.label;
-    btn.addEventListener('click', () => void busy(btn, act.run));
-    row.appendChild(btn);
-  }
-  return row;
-}
-
-async function refreshLight() {
-  const title = $('light-account');
-  const el = $('light-balances');
-  if (!signer) {
-    if (lastLight !== 'none') {
-      lastLight = 'none';
-      title.textContent = 'nobody is paying gas yet';
-      el.innerHTML = '<p class="muted small">Choose who pays gas (top right) and this side fills in. Everything here is public on NEAR.</p>';
-    }
-    return;
-  }
-  const [near, ...bals] = await Promise.all([
-    chain.nearBalance(signer.accountId).catch(() => '0'),
-    ...tokens.map((t) => chain.ftBalance(t.account, signer!.accountId).catch(() => '0')),
-  ]);
-  const key = [signer.accountId, near, ...bals].join('|');
-  if (key === lastLight) return;
-  lastLight = key;
-  title.textContent = signer.accountId;
-  el.innerHTML = '';
-  el.appendChild(pubRow(fromBase(near, 24, 2), 'NEAR', null));
-  tokens.forEach((t, i) => {
-    const act = t.wrapsNear ? { label: 'wrap 1 NEAR', run: () => wrapNear(t) } : { label: `get 100 ${t.symbol}`, run: () => mintTest(t) };
-    el.appendChild(pubRow(fromBase(bals[i], t.decimals), t.symbol, act));
-  });
-}
-
+// ---------- the light: getting tokens into the gas payer's account ----------
 /// NEP-145: a token only holds balances for registered accounts, so register before sending anyone tokens.
 async function ensureRegistered(tokenAccount: string, who: string) {
   const s = requireSigner();
@@ -385,6 +421,60 @@ function updateSwapBuy() {
   const sell = selectedToken('swap-sell');
   const buy = sell.assetId === pair.asset_1 ? pair.asset_2 : pair.asset_1;
   $('swap-buy').textContent = token(buy).symbol;
+}
+
+// ---------- NEAR Intents (1Click): what the batch's net leg would fetch on mainnet ----------
+const ONECLICK = 'https://1click.chaindefuser.com/v0';
+let oneClickTokens: Promise<any[]> | null = null;
+let quoteTimer: number | undefined;
+let quoteSeq = 0;
+
+/// The mainnet 1Click asset for one of the pool's tokens, by symbol (USDC.e stands in for USDC).
+async function oneClickAsset(sym: string): Promise<any | null> {
+  oneClickTokens ??= fetch(`${ONECLICK}/tokens`).then((r) => r.json()).catch(() => []);
+  const want = sym.replace(/\.e$/, '').toUpperCase();
+  return (await oneClickTokens).find((t) => t.blockchain === 'near' && String(t.symbol).toUpperCase() === want) ?? null;
+}
+
+/// Live dry quote for the amount being typed, the way a NEAR-resident pool would route a batch's
+/// net leg: Intents balance to Intents balance. Mainnet prices; nothing moves from the testnet pool.
+async function routeQuote() {
+  const el = $('route-quote');
+  const seq = ++quoteSeq;
+  try {
+    if (!pair) return;
+    const sell = selectedToken('swap-sell');
+    const buy = token(sell.assetId === pair.asset_1 ? pair.asset_2 : pair.asset_1);
+    const human = ($('swap-amount') as HTMLInputElement).value.trim();
+    let amount: string;
+    try { amount = toBase(human, sell.decimals); } catch { el.textContent = ''; return; }
+    const [a, b] = await Promise.all([oneClickAsset(sell.symbol), oneClickAsset(buy.symbol)]);
+    if (!a || !b) { el.textContent = ''; return; }
+    el.textContent = 'asking NEAR Intents…';
+    const deadline = new Date(Date.now() + 3600_000).toISOString();
+    const res = await fetch(`${ONECLICK}/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dry: true, swapType: 'EXACT_INPUT', slippageTolerance: 100,
+        originAsset: a.assetId, depositType: 'INTENTS', destinationAsset: b.assetId, amount,
+        recipient: 'antumbra.near', recipientType: 'INTENTS', refundTo: 'antumbra.near', refundType: 'INTENTS', deadline,
+      }),
+    });
+    const body = await res.json();
+    if (seq !== quoteSeq) return;
+    if (!res.ok || !body.quote) throw new Error(body.message ?? 'no quote');
+    const q = body.quote;
+    const out = fromBase(q.amountOut, b.decimals, 4);
+    el.innerHTML = `On mainnet the batch's net leg would clear through NEAR Intents: ${human} ${sell.symbol} → <strong>${out} ${b.symbol}</strong> in about ${q.timeEstimate} s <span class="muted">(live 1Click quote, nothing moves on testnet)</span>`;
+  } catch (e) {
+    if (seq === quoteSeq) el.innerHTML = `<span class="muted">NEAR Intents has no quote right now (${e instanceof Error ? e.message : e})</span>`;
+  }
+}
+
+function scheduleRouteQuote() {
+  clearTimeout(quoteTimer);
+  quoteTimer = window.setTimeout(() => void routeQuote(), 600);
 }
 
 async function refreshPool() {
@@ -465,7 +555,7 @@ async function proveAndSend(op: string, params: Record<string, unknown>, describ
   return sendPrepared(JSON.parse(result), describe);
 }
 
-/// A mote of value crossing the seam between the realms.
+/// A mote of value crossing the terminator.
 function crossing(dir: 'in' | 'out') {
   const el = $('crossing');
   el.classList.remove('go-in', 'go-out');
@@ -634,7 +724,7 @@ async function handleRedirectReturn() {
   const err = params.get('errorCode');
   const pendingRaw = local.get('pending');
   if (!hashes && !err) return;
-  history.replaceState(null, '', location.pathname);
+  history.replaceState(null, '', location.pathname + location.hash);
   const pend = pendingRaw ? JSON.parse(pendingRaw) : null;
   local.del('pending');
   if (err) { log(`wallet returned an error: ${err} ${params.get('errorMessage') ?? ''}`, { error: true }); return; }
@@ -654,6 +744,8 @@ async function handleRedirectReturn() {
 async function main() {
   setMode((local.get('mode') as 'calm' | 'geek') ?? 'calm');
   $('mode-toggle').addEventListener('change', (e) => setMode((e.target as HTMLInputElement).checked ? 'geek' : 'calm'));
+  setPage(pageFromHash());
+  window.addEventListener('hashchange', () => setPage(pageFromHash()));
 
   await init();
   deployment = await loadDeployment();
@@ -667,11 +759,13 @@ async function main() {
     const sel = $(id) as HTMLSelectElement;
     for (const t of tokens) sel.add(new Option(t.symbol, String(t.assetId)));
   }
+  renderLedger();
 
   document.querySelectorAll<HTMLButtonElement>('.routes button').forEach((b) => b.addEventListener('click', () => setRoute(b.dataset.route as Route)));
   $('move-amount').addEventListener('input', updateMoveButton);
   $('move-token').addEventListener('change', updateMoveButton);
-  $('swap-sell').addEventListener('change', updateSwapBuy);
+  $('swap-sell').addEventListener('change', () => { updateSwapBuy(); scheduleRouteQuote(); });
+  $('swap-amount').addEventListener('input', scheduleRouteQuote);
   const submit = (formId: string, handler: (btn: HTMLButtonElement) => Promise<void>) =>
     $(formId).addEventListener('submit', (e) => { e.preventDefault(); void handler((e.target as HTMLFormElement).querySelector('button[type=submit]')!); });
   submit('form-move', doMove);

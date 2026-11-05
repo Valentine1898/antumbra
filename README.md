@@ -19,6 +19,7 @@ Tracks: `privacy`, `defi`, `open`.
 | 5 | Attack cases in the sandbox tests, `scripts/check.sh`, demo script |
 | 6 | Browser wallet (`web/`): proving in WebAssembly inside a Web Worker (about 3 s per proof), notes scanned and kept in the browser, signing through a NEAR wallet or a throwaway funded testnet account created in-page |
 | 7 | Sealed amounts: the swap circuit proves a verifiable encryption of the amount to the sealer's key, the chain stores only a commitment and a ciphertext, and a sealer (signed executor, or the same program inside OutLayer's TEE) clears each epoch with batch totals |
+| 8 | Real tokens and a wallet UI in two pages: the pool on testnet trades wNEAR and USDC.e; a ledger shows every token's lit part (what NEAR sees) and shaded part (what only you see), the Threshold page moves value across, the Swap page trades inside the shade. Batches priced on NEAR Intents (1Click) as a dry run with live mainnet quotes |
 
 Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -96,28 +97,34 @@ deployment in `deployment.json` through public RPC endpoints (FastNEAR first,
 then two others; each limits requests per IP, so the page fails over). Add
 `?rpc=https://…` to the URL to put your own endpoint first.
 
-The page has two realms. **In the light** is your NEAR account and what it
-holds in public; **in the shade** is your shielded balance, which only you can
-see. The testnet pool trades real testnet tokens: `wrap.testnet` (wNEAR) and
-`usdc.fakes.testnet` (USDC.e, the test stablecoin NEAR's DEXes use).
+The ledger at the top shows every token twice: its lit part (**in the
+light**, what NEAR sees in your account) and its shaded part (**in the
+shade**, your shielded balance, which only you can see), with the terminator
+between them. Two pages work on it: **Threshold** moves value into, out of or
+within the shade; **Swap** trades inside it. The testnet pool trades real
+testnet tokens: `wrap.testnet` (wNEAR) and `usdc.fakes.testnet` (USDC.e, the
+test stablecoin NEAR's DEXes use).
 
 1. **Gas payer.** Connect MyNearWallet, or press *Create a throwaway testnet
    account*: a key pair is generated in the browser and the testnet helper
    service funds a fresh `dev-…testnet` account. The light side fills in with
    its NEAR balance; *wrap 1 NEAR* turns some of it into wNEAR and *get 100
    USDC.e* mints from the test faucet.
-2. **Into the shade.** Shield 0.5 wNEAR: the amount and a note commitment go
-   on-chain, nothing says who owns the note. A mote of light crosses into the
-   shade and the shielded balance unveils.
-3. **Swap in the shade.** Sell 0.1 wNEAR: the proof is built in a Web Worker
-   in about three seconds and the amount goes on-chain sealed (Geek mode shows
-   the batch with one entry and no amount). When the epoch (20 blocks) ends,
-   the pool's sealer clears it and the swap card turns from *sealed* to
-   *cleared*; with a dev key the page claims your share by itself, with a
-   wallet press *Claim*. The bought USDC.e appears as a private note.
-4. **Out of the shade** sends any amount back to a NEAR account (yours by
-   default); **To another shade** is a private transfer to a shielded address.
-   Every step lists in *Activity* what the chain saw.
+2. **Threshold → Into the shade.** Shield 0.5 wNEAR: the amount and a note
+   commitment go on-chain, nothing says who owns the note. A mote of light
+   crosses the terminator and the token's bar in the ledger slides into the
+   shade.
+3. **Swap page.** Sell 0.1 wNEAR: while you type, the page shows what the
+   batch's net leg would fetch on NEAR Intents (a live 1Click quote at mainnet
+   prices; nothing moves on testnet). Press *Seal and swap*: the proof is
+   built in a Web Worker in about three seconds and the amount goes on-chain
+   sealed (Geek mode shows the batch with one entry and no amount). When the
+   epoch (20 blocks) ends, the pool's sealer clears it and the swap card turns
+   from *sealed* to *cleared*; with a dev key the page claims your share by
+   itself, with a wallet press *Claim*. The bought USDC.e appears in the shade.
+4. **Threshold → Out of the shade** sends any amount back to a NEAR account
+   (yours by default); **To another shade** is a private transfer to a
+   shielded address. Every step lists in *Activity* what the chain saw.
 
 Proving keys are regenerated from the seeded setups on first use (about half
 a minute per circuit, once) and cached in IndexedDB. The wallet (keys and
@@ -157,6 +164,8 @@ antumbra sealer clear --pair 1        # the pool operator opens finished epochs 
 antumbra --wallet alice.json claim    # once the epoch is cleared
 antumbra --wallet alice.json withdraw --asset 2 --amount <base units> --to <near account>
 antumbra info
+antumbra route quote --sell 1 --amount <base units>   # live NEAR Intents quote for a batch's net leg (dry run)
+antumbra route plan --pair 1 --epoch <cleared epoch>  # how that batch would have cleared through NEAR Intents
 ```
 
 `antumbra sealer watch --pair 1` keeps clearing epochs as they end; `deploy`

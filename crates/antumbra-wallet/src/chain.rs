@@ -190,6 +190,20 @@ impl Chain {
         self.view("get_token", json!({"asset_id": asset_id})).await
     }
 
+    /// NEP-148 metadata of a token, or None when it has none (test tokens).
+    pub async fn ft_metadata(&self, token: &AccountId) -> Result<Option<Value>> {
+        match self.account.view(token, "ft_metadata").await {
+            Ok(v) => Ok(Some(v.json()?)),
+            Err(e)
+                if e.to_string().contains("MethodNotFound")
+                    || e.to_string().contains("method not found") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub async fn get_asset_id(&self, token: &AccountId) -> Result<Option<u32>> {
         self.view("get_asset_id", json!({"token": token})).await
     }

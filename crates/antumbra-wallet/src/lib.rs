@@ -12,6 +12,8 @@ pub mod state;
 pub mod chain;
 #[cfg(feature = "native")]
 pub mod ops;
+#[cfg(feature = "native")]
+pub mod route;
 
 #[cfg(feature = "native")]
 pub use chain::Chain;
