@@ -139,3 +139,20 @@ Gas: swap 86 Tgas, end_epoch 11, swap_claim 81, withdraw купленого ак
 - Claim розкриває (epoch, pair_id), але не конкретний своп. Delta свопу публічна, як у Penumbra V1.
 
 Далі (день 4): CLI-гаманець (`antumbra-cli`: keys, scan, deposit, transfer, withdraw, swap, claim, end-epoch) і деплой на testnet.
+
+## День 4 (5.11.2026): CLI-гаманець і testnet
+
+Зроблено: `crates/antumbra-wallet` (стан у JSON: ключі, ноти, свопи, кеш усіх листків для Merkle-шляхів; клієнт на near-workspaces через `Account`; кеш proving-ключів на диску; операції sync/deposit/transfer/withdraw/swap/end_epoch/claim), `crates/antumbra-cli` (бінарник `antumbra`, clap; команди keys-new, address, sync, balance, info, deposit, transfer, withdraw, swap, end-epoch, claim, mint, add-liquidity, deploy), `scripts/demo.sh` (повний сценарій через CLI). `deploy` працює двома шляхами: субакаунти профінансованого акаунта (sandbox і testnet) або dev-акаунти через helper.testnet.near.org (досі працює, попри 404 на корені).
+
+Локальний персистентний sandbox: бінарник nearcore, який near-workspaces кладе в `target/tests/debug/build/near-sandbox-*/out/.near/near-sandbox-2.14.0/near-sandbox`; `init` + `run`, root `test.near` з ключем у `validator_key.json`. Повне демо через CLI проти нього пройшло (deposit 37.6, transfer 83.9, withdraw 87.7, swap 86.0, claim 81.0 Tgas).
+
+Testnet-деплой (dev-акаунти, protocol 88): pool `dev-20261105111749-36839728919748.testnet`, токени `dev-20261105111901-60894369203187.testnet` і `dev-20261105111922-78535276543876.testnet`, пара 1 з ліквідністю 1M/1M. Публічні id у `deployment.json` в корені репо; секрети в `*.secret.json` (gitignored).
+
+Гочі дня:
+- `near_workspaces::custom` схований за фічею `unstable`; будь-який RPC (і локальний sandbox) іде через `testnet().rpc_addr(url)`.
+- У `sync` `continue` на нерозшифровуваних листках пропускав оновлення курсора сторінки → «leaf log out of order». Курсор тепер = довжина кешу після сторінки.
+- Секретний файл деплою називався однаково для всіх деплоїв і перезаписувався; тепер `<deployment>.secret.json`.
+- cargo fmt між редагуваннями ламає python-replace без assert: завжди перевіряти, що правка застосувалась.
+- Акаунт, що підписує транзакцію, видно on-chain як платника gas: для реальної приватності потрібен окремий акаунт або relayer (у README).
+
+Далі (день 5): демо-відео, пост в X, тест-покриття негативних кейсів для swap/claim, README-полірування, можливо stretch (1Click або TEE sealing).

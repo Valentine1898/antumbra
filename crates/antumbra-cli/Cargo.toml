@@ -1,0 +1,20 @@
+[package]
+name = "antumbra-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Antumbra command-line wallet and testnet deployer"
+
+[[bin]]
+name = "antumbra"
+path = "src/main.rs"
+
+[dependencies]
+antumbra-wallet = { path = "../antumbra-wallet" }
+near-workspaces.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

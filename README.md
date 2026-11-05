@@ -15,7 +15,7 @@ Tracks: `privacy`, `defi`, `open`.
 | 1 | Gas spike: which curve and verification path to use on NEAR (results below) |
 | 2 | Shielded pool: public deposits of NEP-141 tokens into notes, private join-split transfers, withdrawals to NEAR accounts, note delivery by encrypted ciphertexts and wallet scanning. End-to-end test on a local sandbox |
 | 3 | Swaps: a shielded swap action, per-epoch batches executed against a constant-product pool at one clearing price, a SwapClaim circuit that mints the pro-rata output privately. End-to-end swap cycle on the sandbox |
-| next | CLI wallet, testnet deployment, demo |
+| 4 | `antumbra` CLI wallet (keys, scanning, deposit, transfer, withdraw, swap, claim) with a one-command deployer; the whole flow runs on NEAR testnet (see below) |
 
 Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -27,7 +27,10 @@ Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 | `crates/antumbra-circuits` | Groth16 circuits (join-split, swap, swap claim), deterministic setup, NEAR byte encodings, `antumbra-setup` binary |
 | `contracts/pool` | The shielded pool contract (`antumbra_pool.wasm`) |
 | `contracts/test-ft` | Minimal NEP-141 token with an open `mint`, for tests |
+| `crates/antumbra-wallet` | Wallet library: local state, chain client, proving-key cache, the user-level operations |
+| `crates/antumbra-cli` | The `antumbra` command-line wallet and deployer |
 | `tests/e2e` | Sandbox tests: the transfer cycle (deposit, private transfer, scan, withdraw, two rejected attacks) and the swap cycle (liquidity, swap, epoch execution, claim, withdrawal of the bought asset) |
+| `scripts/demo.sh` | Runs the whole flow through the CLI against a deployment |
 | `keys` | Embedded verifying keys (regenerable, byte-for-byte) |
 | `spike` | Day-1 gas measurements of five verification paths |
 
@@ -61,6 +64,40 @@ nearcore 2.14.0, is downloaded by `near-workspaces`).
    her account. Expect `swap cycle passed` and `test result: ok` for both.
 
 The `spike` crates are independent: see [spike results](#spike-results-day-1).
+
+## Try it on testnet with the CLI
+
+The pool and two test tokens are deployed on NEAR testnet; `deployment.json`
+in the repository root points at them. Build the CLI and run the demo:
+
+1. `cargo build -p antumbra-cli --release`
+2. `ANTUMBRA_RPC=https://test.rpc.fastnear.com scripts/demo.sh deployment.json`
+   This needs a funded testnet account to pay gas: put its id and key in
+   `deployment.secret.json` (`{"deployer_account": "...", "deployer_key":
+   "ed25519:...", "pool_key": ""}`) or export `ANTUMBRA_ACCOUNT` and
+   `ANTUMBRA_KEY`. The script creates two wallets, deposits, transfers
+   privately, withdraws, swaps, waits for the epoch, claims and withdraws the
+   bought asset, printing gas and the pool state at each step. Test tokens
+   can be minted by anyone with `antumbra mint`.
+
+Or deploy your own copy and run against it:
+
+```
+antumbra --network testnet deploy      # dev accounts through the testnet helper, writes deployment.json
+antumbra --wallet alice.json keys-new  # prints a shielded address antumbra:<pk>:<enc>
+antumbra --wallet alice.json deposit --token <token id> --amount 600000
+antumbra --wallet alice.json sync
+antumbra --wallet alice.json transfer --asset 1 --amount 250000 --to antumbra:...
+antumbra --wallet alice.json swap --pair 1 --sell 1 --amount 100000
+antumbra --wallet alice.json claim    # once the epoch (20 blocks) has ended; executes the batch if needed
+antumbra --wallet alice.json withdraw --asset 2 --amount 90661 --to <near account>
+antumbra info
+```
+
+`deploy` also works against a local sandbox: pass `--network http://127.0.0.1:3030
+--account test.near --key <validator key>` and the contracts go to fresh
+subaccounts. The NEAR account that signs a transaction is visible on-chain as
+the gas payer; use a dedicated account (or a relayer) when that link matters.
 
 ## How a private transfer works
 

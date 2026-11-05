@@ -25,3 +25,9 @@ Cargo.lock.bak
 
 # JS
 node_modules/
+
+# Wallet state and deployment secrets
+*.wallet.json
+antumbra-wallet*.json
+*.secret.json
+/proving-keys/

@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/antumbra-core",
     "crates/antumbra-circuits",
+    "crates/antumbra-wallet",
+    "crates/antumbra-cli",
     "contracts/pool",
     "contracts/test-ft",
     "tests/e2e",
