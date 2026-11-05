@@ -6,8 +6,13 @@ license.workspace = true
 publish = false
 description = "Groth16 circuits for Antumbra (join-split, swap claim), setup, proving and NEAR encodings"
 
+[features]
+default = ["parallel"]
+# rayon-backed proving; must be off in wasm (no threads).
+parallel = ["ark-groth16/parallel"]
+
 [dependencies]
-antumbra-core = { path = "../antumbra-core", features = ["std", "r1cs"] }
+antumbra-core = { path = "../antumbra-core", default-features = false, features = ["crypto", "r1cs"] }
 ark-ec = { workspace = true, features = ["std"] }
 ark-ff = { workspace = true, features = ["std"] }
 ark-std = { workspace = true, features = ["std"] }
@@ -15,7 +20,7 @@ ark-serialize = { workspace = true, features = ["std"] }
 ark-relations = { workspace = true, features = ["std"] }
 ark-r1cs-std = { workspace = true, features = ["std"] }
 ark-snark.workspace = true
-ark-groth16 = { workspace = true, features = ["std", "parallel"] }
+ark-groth16 = { workspace = true, features = ["std"] }
 ark-bls12-381 = { workspace = true, features = ["std"] }
 ark-crypto-primitives = { workspace = true, features = ["std", "constraints"] }
 sha2.workspace = true

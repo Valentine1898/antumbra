@@ -1,10 +1,12 @@
 # Demo script and submission post
 
-## Video (3–4 minutes, terminal + testnet explorer)
+## Video (3–4 minutes, browser wallet + testnet explorer)
 
-Record the terminal at a readable font size; keep the explorer tab for the
-pool account open: `https://testnet.nearblocks.io/address/<pool id>` (ids in
-`deployment.json`).
+Record the browser wallet (`cd web && npm run dev`, http://localhost:5173) at a
+readable zoom; keep the explorer tab for the pool account open:
+`https://testnet.nearblocks.io/address/<pool id>` (ids in `deployment.json`).
+Every step below has a button in the wallet and prints what the chain saw in
+the log panel; the CLI (`scripts/demo.sh`) is the fallback.
 
 1. **Pitch (20 s).** "Antumbra is a shielded pool with batch swaps on NEAR.
    Groth16 proofs are verified on-chain
@@ -12,24 +14,22 @@ pool account open: `https://testnet.nearblocks.io/address/<pool id>` (ids in
    join-split, swap, swap claim."
 2. **Repo (20 s).** Scroll the README status table and `docs/DESIGN.md`
    headings. Mention the gas table.
-3. **Pool state (15 s).** `antumbra info`: pool id, root, epoch, the pair with
-   its reserves.
-4. **Deposit and private transfer (45 s).**
-   `antumbra --wallet alice.json deposit --token <t1> --amount 600000`, then
-   `sync`. Show the explorer: the deposit is a public `ft_transfer_call` with a
-   commitment, no owner. `antumbra --wallet alice.json transfer --asset 1
-   --amount 250000 --to <bob address>`; then `antumbra --wallet bob.json sync`
-   finds the note by trial decryption. In the explorer the join-split shows
-   two nullifiers and two commitments and nothing else.
-5. **Swap (45 s).** `antumbra --wallet alice.json swap --pair 1 --sell 1
-   --amount 100000`. Explain: the burned amount is public but unlinkable, the
-   swap commitment goes into the tree, the epoch batch accumulates. Wait for
-   the epoch (20 blocks). `antumbra --wallet alice.json claim` executes the
-   batch (one clearing price for everyone) and mints 90 661 of asset 2 as a
-   private note. `sync` shows the balance.
-6. **Withdraw (20 s).** `antumbra --wallet alice.json withdraw --asset 2
-   --amount 90661 --to <account>`; explorer shows the `ft_transfer` to the
-   account, the pool reserves moved to 1 100 000 / 909 339.
+3. **Pool state and gas payer (20 s).** The pool card: epoch countdown, the
+   pair's reserves. Create a funded testnet dev account in one click (key
+   generated in the browser) and mint test tokens.
+4. **Deposit and private transfer (45 s).** Deposit 600 000 of token 1; the
+   log shows the public amount and commitment, the explorer shows an
+   `ft_transfer_call` with no owner. Transfer 250 000 to a second wallet's
+   address (open the app in a private window for Bob, copy its address). In
+   Bob's window press Sync: the note is found by trial decryption. The log
+   and the explorer show two nullifiers and two commitments, nothing else.
+5. **Swap (45 s).** Swap 100 000 of asset 1: the proof is built in the browser
+   in about three seconds. Explain: the burned amount is public but unlinkable,
+   the swap commitment goes into the tree, the epoch batch accumulates. Wait
+   for the epoch countdown, press Claim: the batch executes (one clearing
+   price for everyone) and the bought asset appears as a private note.
+6. **Withdraw (20 s).** Withdraw the bought asset to the NEAR account; the
+   explorer shows the `ft_transfer`, the pool reserves moved.
 7. **Verification story (20 s).** `scripts/check.sh` output: unit tests,
    constraint counts, the two sandbox scenarios with their rejected attacks.
 8. **Close (15 s).** What is next: sealed amounts through a TEE, routing the

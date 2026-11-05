@@ -6,7 +6,7 @@ use near_workspaces::{
     types::{NearToken, SecretKey},
     Account, AccountId,
 };
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::str::FromStr;
 
@@ -31,7 +31,7 @@ pub struct EpochInfo {
     pub blocks_left: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchInfo {
     pub epoch: u64,
     pub pair_id: u32,

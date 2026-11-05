@@ -4,18 +4,23 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Antumbra wallet: local state, chain client, proving and the user-level operations"
+description = "Antumbra wallet: local state, proving and the user-level operations; chain client for native builds"
+
+[features]
+default = ["native"]
+# near-workspaces chain client and OS randomness (CLI). Off for the wasm build.
+native = ["dep:near-workspaces", "dep:rand", "antumbra-core/std", "antumbra-circuits/parallel"]
 
 [dependencies]
-antumbra-core = { path = "../antumbra-core" }
-antumbra-circuits = { path = "../antumbra-circuits" }
+antumbra-core = { path = "../antumbra-core", default-features = false, features = ["crypto"] }
+antumbra-circuits = { path = "../antumbra-circuits", default-features = false }
 ark-ff = { workspace = true, features = ["std"] }
 ark-std = { workspace = true, features = ["std"] }
 ark-serialize = { workspace = true, features = ["std"] }
-near-workspaces.workspace = true
+near-workspaces = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 hex.workspace = true
 base64 = "0.22"
-rand.workspace = true
+rand = { workspace = true, optional = true }

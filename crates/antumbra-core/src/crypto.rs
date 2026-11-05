@@ -21,6 +21,7 @@ pub struct EncryptionKey {
 }
 
 impl EncryptionKey {
+    #[cfg(feature = "std")]
     pub fn random() -> Self {
         let bytes: [u8; 32] = rand::random();
         Self::from_bytes(bytes)
@@ -48,8 +49,15 @@ fn derive(shared: &[u8; 32], ephemeral_pk: &[u8; 32]) -> (Key, Nonce) {
     )
 }
 
+/// Encrypts with a fresh OS-random ephemeral key.
+#[cfg(feature = "std")]
 pub fn encrypt(recipient: &PublicKey, plaintext: &[u8]) -> Vec<u8> {
-    let eph = StaticSecret::from(rand::random::<[u8; 32]>());
+    encrypt_with_seed(recipient, plaintext, rand::random())
+}
+
+/// Encrypts with the given ephemeral secret; `eph_seed` must be fresh randomness.
+pub fn encrypt_with_seed(recipient: &PublicKey, plaintext: &[u8], eph_seed: [u8; 32]) -> Vec<u8> {
+    let eph = StaticSecret::from(eph_seed);
     let eph_pk = PublicKey::from(&eph);
     let shared = eph.diffie_hellman(recipient);
     let (key, nonce) = derive(shared.as_bytes(), eph_pk.as_bytes());

@@ -1,0 +1,17 @@
+{
+  "name": "antumbra-wasm",
+  "type": "module",
+  "description": "Antumbra wallet for the browser: scanning, proving and call building through wasm-bindgen",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "antumbra_wasm_bg.wasm",
+    "antumbra_wasm.js",
+    "antumbra_wasm.d.ts"
+  ],
+  "main": "antumbra_wasm.js",
+  "types": "antumbra_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

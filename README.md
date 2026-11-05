@@ -16,6 +16,8 @@ Tracks: `privacy`, `defi`, `open`.
 | 2 | Shielded pool: public deposits of NEP-141 tokens into notes, private join-split transfers, withdrawals to NEAR accounts, note delivery by encrypted ciphertexts and wallet scanning. End-to-end test on a local sandbox |
 | 3 | Swaps: a shielded swap action, per-epoch batches executed against a constant-product pool at one clearing price, a SwapClaim circuit that mints the pro-rata output privately. End-to-end swap cycle on the sandbox |
 | 4 | `antumbra` CLI wallet (keys, scanning, deposit, transfer, withdraw, swap, claim) with a one-command deployer; the whole flow runs on NEAR testnet (see below) |
+| 5 | Attack cases in the sandbox tests, `scripts/check.sh`, demo script |
+| 6 | Browser wallet (`web/`): proving in WebAssembly inside a Web Worker (about 3 s per proof), notes scanned and kept in the browser, signing through a NEAR wallet or a throwaway funded testnet account created in-page |
 
 Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -29,6 +31,8 @@ Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 | `contracts/test-ft` | Minimal NEP-141 token with an open `mint`, for tests |
 | `crates/antumbra-wallet` | Wallet library: local state, chain client, proving-key cache, the user-level operations |
 | `crates/antumbra-cli` | The `antumbra` command-line wallet and deployer |
+| `crates/antumbra-wasm` | wasm-bindgen bindings of the wallet for the browser |
+| `web` | The browser wallet (Vite + TypeScript, near-api-js, wallet-selector) |
 | `tests/e2e` | Sandbox tests: the transfer cycle (deposit, private transfer, scan, withdraw, two rejected attacks) and the swap cycle (liquidity, swap, epoch execution, claim, withdrawal of the bought asset) |
 | `scripts/demo.sh` | Runs the whole flow through the CLI against a deployment |
 | `keys` | Embedded verifying keys (regenerable, byte-for-byte) |
@@ -73,6 +77,37 @@ the sandbox download) and about two minutes after that.
    reverted entirely). Expect `swap cycle passed` and `test result: ok` for both.
 
 The `spike` crates are independent: see [spike results](#spike-results-day-1).
+
+## Try it in the browser
+
+```
+cd web && npm install && npm run dev
+```
+
+Open http://localhost:5173. The page talks to the testnet deployment in
+`deployment.json` through FastNEAR's public RPC.
+
+1. **Gas payer.** Connect MyNearWallet, or expand "testnet dev key" and press
+   *Create a funded dev account*: a key pair is generated in the browser and
+   the testnet helper service funds a fresh `dev-…testnet` account. Press
+   *Mint 1 000 000 test tokens* to get both test tokens.
+2. **Deposit** 600 000 of token 1. The log shows what went on-chain: the
+   amount and a note commitment. *Sync* finds the note by trial decryption and
+   the shielded balance appears.
+3. **Transfer** 250 000 to a shielded address (your own, from the wallet card,
+   works as a demo). The proof is built in a Web Worker in about three
+   seconds; the log shows the two nullifiers and two commitments the chain saw.
+4. **Withdraw** 100 000 to any NEAR account; **Swap** 100 000 of asset 1 in
+   the current epoch; once the epoch (20 blocks) has ended, **Claim** executes
+   the batch if nobody has, proves your share and mints it as a private note.
+   *Sync* again and the asset-2 balance shows up; withdraw it if you like.
+
+Proving keys are regenerated from the seeded setups on first use (about half
+a minute per circuit, once) and cached in IndexedDB. The wallet (keys and
+notes) lives in localStorage; export it from *Backup / restore* before
+clearing site data. `npm run build` produces a static site in `web/dist`.
+The wasm bindings in `web/src/wasm` are committed; after changing the Rust
+crates rebuild them with `scripts/build-wasm.sh` (needs `wasm-pack`).
 
 ## Try it on testnet with the CLI
 

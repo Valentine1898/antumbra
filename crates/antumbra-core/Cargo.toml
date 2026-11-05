@@ -8,8 +8,10 @@ description = "Shared primitives for Antumbra: Poseidon, notes, nullifiers, comm
 
 [features]
 default = ["std"]
-# Native-only pieces: note encryption and randomness.
-std = ["ark-ff/std", "ark-std/std", "ark-bls12-381/std", "ark-crypto-primitives/std", "dep:x25519-dalek", "dep:chacha20poly1305", "dep:rand"]
+# Note encryption (pure; works in wasm). Randomness is supplied by the caller.
+crypto = ["dep:x25519-dalek", "dep:chacha20poly1305"]
+# Native conveniences on top: OS randomness.
+std = ["crypto", "ark-ff/std", "ark-std/std", "ark-bls12-381/std", "ark-crypto-primitives/std", "dep:rand"]
 # R1CS gadgets mirroring the native hashing (used by the circuits crate).
 r1cs = ["ark-crypto-primitives/constraints", "dep:ark-r1cs-std", "dep:ark-relations"]
 

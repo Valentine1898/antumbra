@@ -14,7 +14,7 @@ pub mod note;
 pub mod poseidon;
 pub mod tree;
 
-#[cfg(feature = "std")]
+#[cfg(feature = "crypto")]
 pub mod crypto;
 
 #[cfg(feature = "r1cs")]

@@ -82,9 +82,17 @@ impl Address {
 }
 
 impl WalletFile {
+    #[cfg(feature = "native")]
     pub fn generate() -> Self {
-        let sk = Fr::rand(&mut StdRng::from_seed(rand::random()));
-        let enc: [u8; 32] = rand::random();
+        Self::generate_from_seed(rand::random())
+    }
+
+    /// Deterministic from 32 bytes of fresh randomness supplied by the caller.
+    pub fn generate_from_seed(seed: [u8; 32]) -> Self {
+        let mut rng = StdRng::from_seed(seed);
+        let sk = Fr::rand(&mut rng);
+        let mut enc = [0u8; 32];
+        ark_std::rand::RngCore::fill_bytes(&mut rng, &mut enc);
         WalletFile {
             spend_key: fr_to_hex(&sk),
             enc_secret: hex::encode(enc),

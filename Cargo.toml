@@ -5,6 +5,7 @@ members = [
     "crates/antumbra-circuits",
     "crates/antumbra-wallet",
     "crates/antumbra-cli",
+    "crates/antumbra-wasm",
     "contracts/pool",
     "contracts/test-ft",
     "tests/e2e",
@@ -42,7 +43,7 @@ near-contract-standards = "5.30"
 borsh = { version = "1", features = ["derive"] }
 sha2 = { version = "0.10", default-features = false }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-chacha20poly1305 = "0.10"
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 rand = "0.9"
 
 # misc
