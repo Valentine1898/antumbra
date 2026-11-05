@@ -1,11 +1,11 @@
 # Antumbra design
 
-Penumbra V1 swap semantics on NEAR, implemented as one smart contract and
+Shielded batch swaps on NEAR, implemented as one smart contract and
 three Groth16 circuits over BLS12-381, verified on-chain through the NEP-488
 host functions (17 Tgas per proof). The swap input is burned from a shielded
 pool, so it is unlinkable to any account; every swap of an epoch clears at
-one price; the swap output is minted privately. Sealed amounts (Penumbra's
-flow encryption) are out of scope for the core and listed as a stretch goal.
+one price; the swap output is minted privately. Sealed swap amounts are out
+of scope for the core and listed as a stretch goal.
 
 Poseidon over BLS12-381 Fr (width 3, 8 full + 57 partial rounds, x^5) is the
 only hash; its parameters and the empty-subtree roots are generated once by
@@ -58,7 +58,7 @@ inputs that no constraint uses are still bound by squaring them.
 
 `ft_transfer_call(pool, amount, msg = { cm, ciphertext })`. The contract
 checks the token is registered, inserts `cm`, stores the ciphertext. Amount
-and commitment are public, like a transfer into Penumbra.
+and commitment are public; privacy starts inside the pool.
 
 ### JoinSplit: private transfer and withdrawal
 
@@ -91,8 +91,8 @@ is created, `amount_in_1 + amount_in_2 = change + delta`, `direction ∈ {1,
 delta)` with a witness `claim_pk, rseed`. The contract checks that
 `asset_id` is the sold side of the pair, that `epoch` is at most the
 current one and its batch has not been executed, records the nullifiers,
-inserts `cm_change` then `scm`, and adds `delta` to the batch. As in Penumbra
-V1 the burned amount is public but unlinkable to the sender.
+inserts `cm_change` then `scm`, and adds `delta` to the batch. The burned
+amount is public but unlinkable to the sender.
 
 ### Epoch execution (public, permissionless)
 
@@ -114,7 +114,7 @@ bsod_hash = H(DOM_BSOD, epoch, pair_id, asset_1, asset_2, delta_1, delta_2, lamb
 ```
 
 Everyone on a side gets the same price. Only batch totals are public; a
-swap alone in its batch reveals its own amount, the caveat Penumbra documents.
+swap alone in its batch reveals its own amount.
 
 ### SwapClaim
 
@@ -176,5 +176,5 @@ that link.
    the internal pool, so liquidity comes from the solver network.
 2. Sealed deltas: encrypt `delta` to an enclave key (OutLayer); the enclave
    publishes only batch totals plus an attestation; the contract verifies the
-   attestation. This is the piece Penumbra planned as flow encryption.
+   attestation, so even per-swap amounts stay hidden.
 3. Web UI with a wasm prover.

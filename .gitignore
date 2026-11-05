@@ -31,3 +31,6 @@ node_modules/
 antumbra-wallet*.json
 *.secret.json
 /proving-keys/
+
+# Personal working notes, kept out of the public repo
+/HACKATHON-NOTES.md

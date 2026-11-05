@@ -109,7 +109,7 @@ impl SwapRecord {
 }
 
 /// Batch swap output data: the public result of executing one epoch of one
-/// pair, exactly Penumbra's shape plus the pair's asset ids. `lambda_2` pays
+/// pair, plus the pair's asset ids. `lambda_2` pays
 /// the `delta_1` side, `lambda_1` the `delta_2` side; `unfilled_*` is the
 /// input returned when the pool could not execute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]

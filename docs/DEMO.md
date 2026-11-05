@@ -6,8 +6,8 @@ Record the terminal at a readable font size; keep the explorer tab for the
 pool account open: `https://testnet.nearblocks.io/address/<pool id>` (ids in
 `deployment.json`).
 
-1. **Pitch (20 s).** "Antumbra is a shielded pool with batch swaps on NEAR,
-   in the spirit of Penumbra's ZSwap. Groth16 proofs are verified on-chain
+1. **Pitch (20 s).** "Antumbra is a shielded pool with batch swaps on NEAR.
+   Groth16 proofs are verified on-chain
    with NEAR's BLS12-381 host functions, 17 Tgas each. Three circuits:
    join-split, swap, swap claim."
 2. **Repo (20 s).** Scroll the README status table and `docs/DESIGN.md`
@@ -41,7 +41,7 @@ gas and the pool state.
 ## X post (required by the submission form)
 
 > Built at NEAR HACKATHON: Antumbra, a shielded pool with batch swaps on
-> @NEARProtocol, in the spirit of Penumbra's ZSwap.
+> @NEARProtocol.
 >
 > Private transfers, swaps that clear at one price per epoch, and private
 > claims, each a single Groth16 proof verified on-chain with NEAR's

@@ -17,7 +17,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/TODO/antumbra"
+repository = "https://github.com/Valentine1898/antumbra"
 
 [workspace.dependencies]
 # NEAR

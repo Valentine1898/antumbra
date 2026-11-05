@@ -167,7 +167,7 @@ impl Spike {
         verify_wasm::<ark_bn254::Bn254>(&pvk.0, &proof.0, &inputs.0)
     }
 
-    /// Groth16 over BLS12-377 in pure wasm (arkworks). Penumbra's curve; no host functions on NEAR.
+    /// Groth16 over BLS12-377 in pure wasm (arkworks). BLS12-377 has no host functions on NEAR.
     pub fn verify_bls12377_wasm(
         &self,
         pvk: Base64VecU8,

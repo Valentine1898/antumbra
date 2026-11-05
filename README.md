@@ -1,8 +1,8 @@
 # Antumbra
 
-A shielded pool with batch swaps on NEAR, in the spirit of Penumbra's ZSwap:
-inputs are burned from a shielded pool (unlinkable to the sender), every swap
-in an epoch clears at one price, outputs are minted privately. Groth16 over
+A shielded pool with batch swaps on NEAR: inputs are burned from a shielded
+pool (unlinkable to the sender), every swap in an epoch clears at one price,
+outputs are minted privately. Groth16 over
 BLS12-381, verified on-chain through NEAR's NEP-488 host functions.
 
 Built for the [NEAR HACKATHON](https://nearhackathon.com/) (1–14 November 2026).
@@ -131,8 +131,7 @@ trial-decrypting the ciphertext log (X25519 + ChaCha20-Poly1305).
 
 A swap is a join-split whose second output is a swap commitment
 `scm = H(DOM_SWAP, epoch, pair_id, direction, delta, claim_pk, rseed)`; the
-burned amount `delta` is public (as in Penumbra V1) but unlinkable to the
-sender. All swaps of an epoch (20 blocks) for a pair are summed; when the
+burned amount `delta` is public but unlinkable to the sender. All swaps of an epoch (20 blocks) for a pair are summed; when the
 epoch ends anyone calls `end_epoch`, which executes the totals against the
 pool and publishes `BatchSwapOutputData` (deltas, outputs, unfilled amounts
 per direction). The swapper then proves, in zero knowledge, that a swap
@@ -169,9 +168,8 @@ action, which is why the protocol uses one proof per action.
   the membership check but still yields a nullifier, which the contract
   records. Dummies therefore use fresh randomness per transaction.
 - **Deposits and swap inputs are public amounts.** A deposit's amount and
-  commitment are visible, as with a transfer into Penumbra; a swap reveals
-  how much is burned (unlinkably), as in Penumbra V1. Privacy starts inside
-  the pool; sealed swap amounts are a stretch goal.
+  commitment are visible; a swap reveals how much is burned, unlinkably.
+  Privacy starts inside the pool; sealed swap amounts are a stretch goal.
 - **Amounts are 112-bit.** Deposits, swaps and withdrawals above 2^112 - 1
   are rejected, so in-circuit products stay below the field modulus.
 - **Claims reveal the batch.** A claim names `(epoch, pair_id)` so the
@@ -194,9 +192,9 @@ of fixed call cost. Reproduce with the three `spike` steps:
 | BN254, pure wasm (ark-groth16) | 56.5 |
 | BLS12-377, pure wasm (ark-groth16) | 129.9 |
 
-Pure-wasm verification of Penumbra's own curve fits under the 300 Tgas call
-limit but leaves room for only one proof per transaction, so Penumbra's
-multi-proof transactions cannot be ported as they are.
+Pure-wasm verification over BLS12-377 fits under the 300 Tgas call limit but
+leaves room for only one proof per transaction, which rules out designs with
+several proofs per transaction.
 
 ## License
 
