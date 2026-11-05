@@ -7,6 +7,7 @@
 
 pub use ark_bls12_381::Fr;
 
+pub mod amm;
 pub mod consts;
 pub mod encoding;
 pub mod note;

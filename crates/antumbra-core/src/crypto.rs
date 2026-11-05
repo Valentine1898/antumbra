@@ -83,26 +83,67 @@ pub struct NotePlaintext {
     pub rseed: Fr,
 }
 
-impl NotePlaintext {
-    pub const LEN: usize = 4 + 16 + 32;
+/// What a swapper stores for their future self: everything needed to rebuild
+/// the swap record and claim it (`claim_pk` is the wallet's own key).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SwapPlaintext {
+    pub epoch: u64,
+    pub pair_id: u32,
+    pub direction: u8,
+    pub delta: u128,
+    pub rseed: Fr,
+}
 
+/// Tagged plaintext carried by a ciphertext in the on-chain log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plaintext {
+    Note(NotePlaintext),
+    Swap(SwapPlaintext),
+}
+
+const TAG_NOTE: u8 = 0;
+const TAG_SWAP: u8 = 1;
+
+impl Plaintext {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(Self::LEN);
-        v.extend_from_slice(&self.asset_id.to_le_bytes());
-        v.extend_from_slice(&self.amount.to_le_bytes());
-        v.extend_from_slice(&fr_to_bytes(&self.rseed));
+        let mut v = Vec::with_capacity(64);
+        match self {
+            Plaintext::Note(n) => {
+                v.push(TAG_NOTE);
+                v.extend_from_slice(&n.asset_id.to_le_bytes());
+                v.extend_from_slice(&n.amount.to_le_bytes());
+                v.extend_from_slice(&fr_to_bytes(&n.rseed));
+            }
+            Plaintext::Swap(s) => {
+                v.push(TAG_SWAP);
+                v.extend_from_slice(&s.epoch.to_le_bytes());
+                v.extend_from_slice(&s.pair_id.to_le_bytes());
+                v.push(s.direction);
+                v.extend_from_slice(&s.delta.to_le_bytes());
+                v.extend_from_slice(&fr_to_bytes(&s.rseed));
+            }
+        }
         v
     }
 
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() != Self::LEN {
-            return None;
+        match b.first()? {
+            &TAG_NOTE if b.len() == 1 + 4 + 16 + 32 => Some(Plaintext::Note(NotePlaintext {
+                asset_id: u32::from_le_bytes(b[1..5].try_into().ok()?),
+                amount: u128::from_le_bytes(b[5..21].try_into().ok()?),
+                rseed: fr_from_bytes(b[21..53].try_into().ok()?)?,
+            })),
+            &TAG_SWAP if b.len() == 1 + 8 + 4 + 1 + 16 + 32 => {
+                Some(Plaintext::Swap(SwapPlaintext {
+                    epoch: u64::from_le_bytes(b[1..9].try_into().ok()?),
+                    pair_id: u32::from_le_bytes(b[9..13].try_into().ok()?),
+                    direction: b[13],
+                    delta: u128::from_le_bytes(b[14..30].try_into().ok()?),
+                    rseed: fr_from_bytes(b[30..62].try_into().ok()?)?,
+                }))
+            }
+            _ => None,
         }
-        Some(NotePlaintext {
-            asset_id: u32::from_le_bytes(b[0..4].try_into().ok()?),
-            amount: u128::from_le_bytes(b[4..20].try_into().ok()?),
-            rseed: fr_from_bytes(b[20..52].try_into().ok()?)?,
-        })
     }
 }
 
@@ -114,16 +155,25 @@ mod tests {
     fn roundtrip_and_wrong_key() {
         let bob = EncryptionKey::random();
         let eve = EncryptionKey::random();
-        let pt = NotePlaintext {
+        let pt = Plaintext::Note(NotePlaintext {
             asset_id: 1,
             amount: 5,
             rseed: Fr::from(9u64),
-        };
+        });
         let blob = encrypt(&bob.public, &pt.to_bytes());
         assert_eq!(
-            NotePlaintext::from_bytes(&decrypt(&bob.secret, &blob).unwrap()),
+            Plaintext::from_bytes(&decrypt(&bob.secret, &blob).unwrap()),
             Some(pt)
         );
         assert!(decrypt(&eve.secret, &blob).is_none());
+        let sw = Plaintext::Swap(SwapPlaintext {
+            epoch: 3,
+            pair_id: 1,
+            direction: 2,
+            delta: 77,
+            rseed: Fr::from(4u64),
+        });
+        assert_eq!(Plaintext::from_bytes(&sw.to_bytes()), Some(sw));
+        assert_eq!(Plaintext::from_bytes(&[9u8; 53]), None);
     }
 }

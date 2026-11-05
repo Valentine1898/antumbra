@@ -22,6 +22,7 @@ ark-crypto-primitives.workspace = true
 ark-r1cs-std = { workspace = true, optional = true }
 ark-relations = { workspace = true, optional = true }
 borsh.workspace = true
+primitive-types = { version = "0.14", default-features = false }
 sha2.workspace = true
 hex.workspace = true
 x25519-dalek = { workspace = true, optional = true }

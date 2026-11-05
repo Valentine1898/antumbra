@@ -14,7 +14,8 @@ Tracks: `privacy`, `defi`, `open`.
 | --- | --- |
 | 1 | Gas spike: which curve and verification path to use on NEAR (results below) |
 | 2 | Shielded pool: public deposits of NEP-141 tokens into notes, private join-split transfers, withdrawals to NEAR accounts, note delivery by encrypted ciphertexts and wallet scanning. End-to-end test on a local sandbox |
-| next | Swap action, epoch batches with a uniform clearing price, SwapClaim circuit, CLI wallet |
+| 3 | Swaps: a shielded swap action, per-epoch batches executed against a constant-product pool at one clearing price, a SwapClaim circuit that mints the pro-rata output privately. End-to-end swap cycle on the sandbox |
+| next | CLI wallet, testnet deployment, demo |
 
 Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -23,11 +24,11 @@ Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 | Path | What |
 | --- | --- |
 | `crates/antumbra-core` | Poseidon (BLS12-381 Fr), notes, nullifiers, commitment tree, note encryption, R1CS gadgets. Shared by contract, circuits and wallet |
-| `crates/antumbra-circuits` | Groth16 circuits (join-split today), deterministic setup, NEAR byte encodings, `antumbra-setup` binary |
+| `crates/antumbra-circuits` | Groth16 circuits (join-split, swap, swap claim), deterministic setup, NEAR byte encodings, `antumbra-setup` binary |
 | `contracts/pool` | The shielded pool contract (`antumbra_pool.wasm`) |
 | `contracts/test-ft` | Minimal NEP-141 token with an open `mint`, for tests |
-| `tests/e2e` | Sandbox test: deposit, private transfer, scan, withdraw, and two rejected attacks |
-| `keys` | Embedded verifying key (regenerable, byte-for-byte) |
+| `tests/e2e` | Sandbox tests: the transfer cycle (deposit, private transfer, scan, withdraw, two rejected attacks) and the swap cycle (liquidity, swap, epoch execution, claim, withdrawal of the bought asset) |
+| `keys` | Embedded verifying keys (regenerable, byte-for-byte) |
 | `spike` | Day-1 gas measurements of five verification paths |
 
 ## Try it
@@ -38,19 +39,26 @@ nearcore 2.14.0, is downloaded by `near-workspaces`).
 
 1. `cargo test -p antumbra-core --all-features -p antumbra-circuits --release -- --nocapture`
    Unit tests: gadget-vs-native hash and tree consistency, note encryption,
-   join-split constraints (prints `joinsplit constraints: 17312`), prove and
-   verify natively. Expect all tests to pass.
+   AMM arithmetic, and the three circuits (prints `joinsplit constraints:
+   17376`, `swap constraints: 17625`, `swapclaim constraints: 22349`), plus a
+   native prove-and-verify. Expect all tests to pass.
 2. `scripts/build-contracts.sh`
-   Regenerates `keys/joinsplit.vk.near` (prints its sha256; identical on every
+   Regenerates `keys/*.vk.near` (prints their sha256; identical on every
    machine) and builds both contracts to `target/wasm32-unknown-unknown/release/`.
 3. `CARGO_TARGET_DIR=target/tests cargo test -p antumbra-e2e -- --nocapture`
-   Starts a local sandbox, deploys the token and the pool, then: Alice deposits
-   600 000 units into a note; Alice privately pays Bob 250 000 (join-split with
-   one real and one dummy input); Bob scans the on-chain ciphertext log and
-   finds exactly his note; Bob withdraws 100 000 to his NEAR account. Expect a
-   gas row per call, `all checks passed`, and `test result: ok`. The test also
-   asserts that replaying a spent note fails with `note already spent`, and
-   that a withdrawal proof bound to Bob cannot pay Alice (`invalid proof`).
+   Starts local sandboxes and runs two scenarios, each printing a gas row per call.
+   `deposit_transfer_scan_withdraw`: Alice deposits 600 000 units into a note;
+   Alice privately pays Bob 250 000 (join-split with one real and one dummy
+   input); Bob scans the on-chain ciphertext log and finds exactly his note;
+   Bob withdraws 100 000 to his NEAR account; replaying the spent note fails
+   with `note already spent`; a withdrawal proof bound to Bob cannot pay Alice
+   (`invalid proof`). Expect `all checks passed`.
+   `swap_cycle`: Alice seeds a pool with 1 000 000 of each asset, deposits
+   600 000 of asset 1, swaps 100 000 of it in the current epoch (change stays
+   private), the epoch ends and anyone executes the batch (`lambda_2 = 90661`,
+   the constant-product output after the 0.3% fee), Alice finds her swap by
+   scanning, claims 90 661 of asset 2 as a private note, and withdraws it to
+   her account. Expect `swap cycle passed` and `test result: ok` for both.
 
 The `spike` crates are independent: see [spike results](#spike-results-day-1).
 
@@ -73,6 +81,20 @@ verifies the proof with the BLS12-381 host functions (17 Tgas), records the
 nullifiers and appends the new commitments. Recipients find their notes by
 trial-decrypting the ciphertext log (X25519 + ChaCha20-Poly1305).
 
+## How a swap works
+
+A swap is a join-split whose second output is a swap commitment
+`scm = H(DOM_SWAP, epoch, pair_id, direction, delta, claim_pk, rseed)`; the
+burned amount `delta` is public (as in Penumbra V1) but unlinkable to the
+sender. All swaps of an epoch (20 blocks) for a pair are summed; when the
+epoch ends anyone calls `end_epoch`, which executes the totals against the
+pool and publishes `BatchSwapOutputData` (deltas, outputs, unfilled amounts
+per direction). The swapper then proves, in zero knowledge, that a swap
+commitment in the tree belongs to them and that their outputs are the exact
+pro-rata share of the published result, and the contract mints those outputs
+as private notes. Only the batch totals and which batch is claimed are
+public; the link between swap and claim is not.
+
 ## Measured gas (sandbox, nearcore 2.14.0)
 
 | Call | Tgas |
@@ -82,6 +104,9 @@ trial-decrypting the ciphertext log (X25519 + ChaCha20-Poly1305).
 | deposit (`ft_transfer_call` round trip, one tree insert) | 38 total |
 | join-split transfer (verify + 2 tree inserts) | 83 |
 | join-split withdrawal (same + `ft_transfer`) | 88 total |
+| swap (verify + 2 tree inserts) | 86 |
+| end_epoch (batch execution, no proof) | 11 |
+| swap_claim (verify + 2 tree inserts) | 81 |
 
 The 300 Tgas limit per call leaves room for one proof plus tree updates per
 action, which is why the protocol uses one proof per action.
@@ -97,8 +122,14 @@ action, which is why the protocol uses one proof per action.
 - **Dummy inputs.** Every join-split has two inputs; a zero-value dummy skips
   the membership check but still yields a nullifier, which the contract
   records. Dummies therefore use fresh randomness per transaction.
-- **Deposits are public.** Amount and commitment of a deposit are visible, as
-  with a transfer into Penumbra; privacy starts inside the pool.
+- **Deposits and swap inputs are public amounts.** A deposit's amount and
+  commitment are visible, as with a transfer into Penumbra; a swap reveals
+  how much is burned (unlinkably), as in Penumbra V1. Privacy starts inside
+  the pool; sealed swap amounts are a stretch goal.
+- **Amounts are 112-bit.** Deposits, swaps and withdrawals above 2^112 - 1
+  are rejected, so in-circuit products stay below the field modulus.
+- **Claims reveal the batch.** A claim names `(epoch, pair_id)` so the
+  contract can look up the batch result, but not which swap it belongs to.
 - Not audited. Not for real funds.
 
 ## Spike results (day 1)

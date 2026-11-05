@@ -126,3 +126,16 @@ Poseidon-крейти Penumbra (poseidon-permutation 1.1, poseidon-paramgen 0.4,
 - arkworks 0.6: `ark_relations::gr1cs`, `GR1CSVar` замість `R1CSVar`, `FieldBasedCryptographicSponge` для `squeeze_native_field_elements`, `ark-snark` без фічі `std`.
 
 План дня 3: swap-дія (join-split з ext_hash = swap commitment), епохи з CPMM і BatchSwapOutputData, схема swap_claim, e2e на повний цикл свопу.
+
+## День 3 (5.11.2026): свопи працюють наскрізь
+
+Зроблено: окрема схема swap (10 публічних входів: root, asset_id, nf×2, cm_change, scm, epoch, pair_id, direction, delta; 17 625 констрейнтів), схема swap_claim (5 входів; 22 349 констрейнтів; pro-rata через q/r-свідків і `enforce_cmp`), swap-запис з епохою, BSOD з asset-id пари, CPMM з 0.3% у `antumbra_core::amm` на U256, пари й ліквідність у контракті (`ft_transfer_call` з `liquidity_pair`), `swap`, `end_epoch` (permissionless, swap_claim виконує сам, якщо ніхто не викликав), `swap_claim`, view для епохи/пари/батчу, тегований plaintext (note/swap) для скану. E2E `swap_cycle`: ліквідність 1M/1M, своп 100 000 → 90 661 другого активу, claim, withdraw. Усі тести зелені (core 11, circuits 9, pool 1, e2e 2).
+
+Gas: swap 86 Tgas, end_epoch 11, swap_claim 81, withdraw купленого активу 88 total.
+
+Рішення:
+- Суми обмежено 112 бітами (range-check у схемах і в контракті), щоб добуток двох сум не переповнював поле у claim.
+- Swap приймається в будь-яку ще не виконану епоху не пізніше поточної (sandbox робить блоки швидше, ніж встигає пруф; на testnet це теж рятує транзакцію, що потрапила на межу епохи). Epoch = 20 блоків.
+- Claim розкриває (epoch, pair_id), але не конкретний своп. Delta свопу публічна, як у Penumbra V1.
+
+Далі (день 4): CLI-гаманець (`antumbra-cli`: keys, scan, deposit, transfer, withdraw, swap, claim, end-epoch) і деплой на testnet.

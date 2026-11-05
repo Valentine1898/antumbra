@@ -70,6 +70,108 @@ pub fn withdraw_ext_hash(recipient: &str) -> Fr {
     hash(&[Fr::from(DOM_EXT), encoding::string_to_fr(recipient)])
 }
 
+/// Direction of a swap within a pair: 1 burns asset_1 for asset_2, 2 the reverse.
+pub const DIR_1_TO_2: u8 = 1;
+pub const DIR_2_TO_1: u8 = 2;
+
+/// A swap intent: `delta` of one side of `pair_id`, in `epoch`, claimable by
+/// the owner of `claim_pk`. Its commitment is a leaf of the commitment tree.
+///
+/// ```text
+/// scm = H(DOM_SWAP, epoch, pair_id, direction, delta, claim_pk, rseed)
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SwapRecord {
+    pub epoch: u64,
+    pub pair_id: u32,
+    pub direction: u8,
+    pub delta: u128,
+    pub claim_pk: Fr,
+    pub rseed: Fr,
+}
+
+impl SwapRecord {
+    pub fn commitment(&self) -> Fr {
+        hash(&[
+            Fr::from(DOM_SWAP),
+            Fr::from(self.epoch),
+            Fr::from(self.pair_id as u64),
+            Fr::from(self.direction as u64),
+            Fr::from(self.delta),
+            self.claim_pk,
+            self.rseed,
+        ])
+    }
+
+    pub fn nullifier(&self, nk: Fr, position: u64) -> Fr {
+        hash(&[Fr::from(DOM_NF), nk, self.commitment(), Fr::from(position)])
+    }
+}
+
+/// Batch swap output data: the public result of executing one epoch of one
+/// pair, exactly Penumbra's shape plus the pair's asset ids. `lambda_2` pays
+/// the `delta_1` side, `lambda_1` the `delta_2` side; `unfilled_*` is the
+/// input returned when the pool could not execute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Bsod {
+    pub epoch: u64,
+    pub pair_id: u32,
+    pub asset_1: u32,
+    pub asset_2: u32,
+    pub delta_1: u128,
+    pub delta_2: u128,
+    pub lambda_1: u128,
+    pub lambda_2: u128,
+    pub unfilled_1: u128,
+    pub unfilled_2: u128,
+}
+
+impl Bsod {
+    pub fn hash(&self) -> Fr {
+        hash(&[
+            Fr::from(DOM_BSOD),
+            Fr::from(self.epoch),
+            Fr::from(self.pair_id as u64),
+            Fr::from(self.asset_1 as u64),
+            Fr::from(self.asset_2 as u64),
+            Fr::from(self.delta_1),
+            Fr::from(self.delta_2),
+            Fr::from(self.lambda_1),
+            Fr::from(self.lambda_2),
+            Fr::from(self.unfilled_1),
+            Fr::from(self.unfilled_2),
+        ])
+    }
+
+    /// Pro-rata share of a swap of `delta` in `direction`:
+    /// `(output amount, refund amount, output asset, refund asset)`.
+    pub fn claim_amounts(&self, direction: u8, delta: u128) -> (u128, u128, u32, u32) {
+        let (total, lambda, unfilled, asset_out, asset_in) = if direction == DIR_1_TO_2 {
+            (
+                self.delta_1,
+                self.lambda_2,
+                self.unfilled_1,
+                self.asset_2,
+                self.asset_1,
+            )
+        } else {
+            (
+                self.delta_2,
+                self.lambda_1,
+                self.unfilled_2,
+                self.asset_1,
+                self.asset_2,
+            )
+        };
+        (
+            crate::amm::mul_div(delta, lambda, total),
+            crate::amm::mul_div(delta, unfilled, total),
+            asset_out,
+            asset_in,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

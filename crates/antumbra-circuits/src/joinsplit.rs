@@ -6,47 +6,16 @@
 //! Statement: both input notes exist in the tree under `root` (unless their
 //! amount is zero), their nullifiers are `nf_i`, the output commitments are
 //! `cm_out_j`, and `amount_in_1 + amount_in_2 + public_amount = amount_out_1 +
-//! amount_out_2` with every amount below 2^128. `ext_hash` is only bound.
+//! amount_out_2` with every amount below 2^112. `ext_hash` is only bound.
 
-use antumbra_core::{
-    gadgets::{domain, hash_var, merkle_root_var},
-    note::{Note, SpendKey, DOM_NF, DOM_NK, DOM_NOTE, DOM_PK},
-    Fr, TREE_DEPTH,
-};
+pub use crate::common::InputWitness;
+use crate::common::{output_note, spend_input};
+use antumbra_core::{note::Note, Fr};
 use ark_ff::Zero;
-use ark_r1cs_std::{
-    alloc::AllocVar, boolean::Boolean, convert::ToBitsGadget, eq::EqGadget, fields::fp::FpVar,
-    fields::FieldVar,
-};
+use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar, fields::FieldVar};
 use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 
 pub const N_PUBLIC: usize = 8;
-
-#[derive(Clone, Debug)]
-pub struct InputWitness {
-    pub note: Note,
-    pub sk: SpendKey,
-    pub position: u64,
-    pub siblings: Vec<Fr>,
-}
-
-impl InputWitness {
-    /// Zero-value input; its membership is not checked. `entropy` must be
-    /// fresh per transaction: the contract records every nullifier, including
-    /// a dummy's, so a repeated dummy would be rejected as a double spend.
-    pub fn dummy(asset_id: u32, entropy: Fr) -> Self {
-        let sk = SpendKey(entropy);
-        InputWitness {
-            note: Note::dummy(asset_id, sk.pk(), entropy),
-            sk,
-            position: 0,
-            siblings: vec![Fr::zero(); TREE_DEPTH],
-        }
-    }
-    pub fn nullifier(&self) -> Fr {
-        self.note.nullifier(self.sk.nk(), self.position)
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct JoinSplitPublic {
@@ -123,14 +92,6 @@ impl JoinSplitCircuit {
     }
 }
 
-fn range_check_128(x: &FpVar<Fr>) -> Result<(), SynthesisError> {
-    let bits = x.to_bits_le()?;
-    for b in &bits[128..] {
-        b.enforce_equal(&Boolean::FALSE)?;
-    }
-    Ok(())
-}
-
 impl ConstraintSynthesizer<Fr> for JoinSplitCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
         let p = &self.public;
@@ -149,62 +110,12 @@ impl ConstraintSynthesizer<Fr> for JoinSplitCircuit {
 
         let mut sum_in = FpVar::<Fr>::zero();
         for (inp, nf_expected) in self.inputs.iter().zip(nf_pub.iter()) {
-            let amount = FpVar::new_witness(cs.clone(), || Ok(Fr::from(inp.note.amount)))?;
-            range_check_128(&amount)?;
-            let sk = FpVar::new_witness(cs.clone(), || Ok(inp.sk.0))?;
-            let rseed = FpVar::new_witness(cs.clone(), || Ok(inp.note.rseed))?;
-            let position_bits: Vec<Boolean<Fr>> = (0..TREE_DEPTH)
-                .map(|i| Boolean::new_witness(cs.clone(), || Ok((inp.position >> i) & 1 == 1)))
-                .collect::<Result<_, _>>()?;
-            let position = Boolean::le_bits_to_fp(&position_bits)?;
-            let siblings: Vec<FpVar<Fr>> = inp
-                .siblings
-                .iter()
-                .map(|s| FpVar::new_witness(cs.clone(), || Ok(*s)))
-                .collect::<Result<_, _>>()?;
-
-            let pk = hash_var(cs.clone(), &[domain(DOM_PK), sk.clone()])?;
-            let nk = hash_var(cs.clone(), &[domain(DOM_NK), sk])?;
-            let cm = hash_var(
-                cs.clone(),
-                &[
-                    domain(DOM_NOTE),
-                    asset_id.clone(),
-                    amount.clone(),
-                    pk,
-                    rseed,
-                ],
-            )?;
-            let nf = hash_var(cs.clone(), &[domain(DOM_NF), nk, cm.clone(), position])?;
-            nf.enforce_equal(nf_expected)?;
-
-            let computed_root = merkle_root_var(cs.clone(), cm, &position_bits, &siblings)?;
-            let is_real = !amount.is_zero()?;
-            computed_root.conditional_enforce_equal(&root, &is_real)?;
-
-            sum_in += amount;
+            sum_in += spend_input(cs.clone(), inp, &asset_id, &root, nf_expected)?;
         }
-
         let mut sum_out = FpVar::<Fr>::zero();
         for (out, cm_expected) in self.outputs.iter().zip(cm_pub.iter()) {
-            let amount = FpVar::new_witness(cs.clone(), || Ok(Fr::from(out.amount)))?;
-            range_check_128(&amount)?;
-            let pk = FpVar::new_witness(cs.clone(), || Ok(out.pk))?;
-            let rseed = FpVar::new_witness(cs.clone(), || Ok(out.rseed))?;
-            let cm = hash_var(
-                cs.clone(),
-                &[
-                    domain(DOM_NOTE),
-                    asset_id.clone(),
-                    amount.clone(),
-                    pk,
-                    rseed,
-                ],
-            )?;
-            cm.enforce_equal(cm_expected)?;
-            sum_out += amount;
+            sum_out += output_note(cs.clone(), out, &asset_id, cm_expected)?;
         }
-
         (sum_in + public_amount).enforce_equal(&sum_out)?;
 
         // Bind ext_hash to the proof even though no constraint needs it.
@@ -216,7 +127,10 @@ impl ConstraintSynthesizer<Fr> for JoinSplitCircuit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use antumbra_core::{note::withdraw_ext_hash, tree};
+    use antumbra_core::{
+        note::{withdraw_ext_hash, SpendKey},
+        tree,
+    };
     use ark_relations::gr1cs::ConstraintSystem;
 
     fn sample() -> JoinSplitCircuit {

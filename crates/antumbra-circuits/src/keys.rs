@@ -1,8 +1,8 @@
 //! Key generation, proving and native verification.
 //!
-//! The setup is deterministic (fixed seed) so anyone can regenerate the exact
-//! keys the contract embeds. That makes it a *development* setup: the toxic
-//! waste is public. A real deployment needs an MPC ceremony.
+//! The setups are deterministic (fixed seeds) so anyone can regenerate the
+//! exact keys the contract embeds. That makes them *development* setups: the
+//! toxic waste is public. A real deployment needs an MPC ceremony.
 
 use ark_groth16::{prepare_verifying_key, Groth16, Proof, ProvingKey, VerifyingKey};
 use ark_relations::gr1cs::ConstraintSynthesizer;
@@ -10,14 +10,32 @@ use ark_snark::SNARK;
 use ark_std::rand::{rngs::StdRng, SeedableRng};
 use sha2::{Digest, Sha256};
 
-use crate::{joinsplit::JoinSplitCircuit, near_encoding, Bls12_381, Fr};
+use crate::{
+    joinsplit::JoinSplitCircuit, near_encoding, swap::SwapCircuit, swapclaim::SwapClaimCircuit,
+    Bls12_381, Fr,
+};
+
+pub type Keys = (ProvingKey<Bls12_381>, VerifyingKey<Bls12_381>);
 
 pub const JOINSPLIT_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-joinsplit-v01";
+pub const SWAP_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-swap-v0000001";
+pub const SWAPCLAIM_SETUP_SEED: [u8; 32] = *b"antumbra-dev-setup-swapclaim-v01";
 
-pub fn joinsplit_setup() -> (ProvingKey<Bls12_381>, VerifyingKey<Bls12_381>) {
-    let mut rng = StdRng::from_seed(JOINSPLIT_SETUP_SEED);
-    Groth16::<Bls12_381>::circuit_specific_setup(JoinSplitCircuit::blank(), &mut rng)
-        .expect("setup")
+fn setup<C: ConstraintSynthesizer<Fr>>(blank: C, seed: [u8; 32]) -> Keys {
+    let mut rng = StdRng::from_seed(seed);
+    Groth16::<Bls12_381>::circuit_specific_setup(blank, &mut rng).expect("setup")
+}
+
+pub fn joinsplit_setup() -> Keys {
+    setup(JoinSplitCircuit::blank(), JOINSPLIT_SETUP_SEED)
+}
+
+pub fn swap_setup() -> Keys {
+    setup(SwapCircuit::blank(), SWAP_SETUP_SEED)
+}
+
+pub fn swapclaim_setup() -> Keys {
+    setup(SwapClaimCircuit::blank(), SWAPCLAIM_SETUP_SEED)
 }
 
 pub fn prove<C: ConstraintSynthesizer<Fr>>(
@@ -34,12 +52,25 @@ pub fn verify(vk: &VerifyingKey<Bls12_381>, inputs: &[Fr], proof: &Proof<Bls12_3
     Groth16::<Bls12_381>::verify_proof(&pvk, proof, inputs).expect("verify")
 }
 
-/// Verifying key in the NEP-488 layout the contract embeds, plus its sha256.
-pub fn joinsplit_vk_near() -> (Vec<u8>, [u8; 32]) {
-    let (_, vk) = joinsplit_setup();
-    let bytes = near_encoding::vk_bytes(&vk);
+/// A verifying key in the NEP-488 layout the contract embeds, plus its sha256.
+pub fn vk_near(vk: &VerifyingKey<Bls12_381>) -> (Vec<u8>, [u8; 32]) {
+    let bytes = near_encoding::vk_bytes(vk);
     let hash: [u8; 32] = Sha256::digest(&bytes).into();
     (bytes, hash)
+}
+
+/// `(file stem, bytes, sha256)` for every circuit.
+pub fn all_vks_near() -> Vec<(&'static str, Vec<u8>, [u8; 32])> {
+    let (_, js) = joinsplit_setup();
+    let (_, sw) = swap_setup();
+    let (_, sc) = swapclaim_setup();
+    [("joinsplit", js), ("swap", sw), ("swapclaim", sc)]
+        .into_iter()
+        .map(|(name, vk)| {
+            let (bytes, hash) = vk_near(&vk);
+            (name, bytes, hash)
+        })
+        .collect()
 }
 
 #[cfg(test)]
