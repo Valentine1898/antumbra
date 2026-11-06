@@ -14,11 +14,12 @@ the log panel; the CLI (`scripts/demo.sh`) is the fallback.
    join-split, swap, swap claim."
 2. **Repo (20 s).** Scroll the README status table and `docs/DESIGN.md`
    headings. Mention the gas table.
-3. **The ledger and the gas payer (20 s).** Every token has a lit part (*in
-   the light*, what NEAR sees) and a shaded part (*in the shade*, only you can
-   see it), with the terminator between them. Create a funded testnet dev
-   account in one click (key generated in the browser); the lit side fills
-   in. Press *wrap 1 NEAR* and *get 100 USDC.e*: real testnet tokens.
+3. **The two realms and the gas payer (20 s).** The side card: *in the
+   light* is the NEAR account and what it holds in public, *in the shade* is
+   the shielded address and balances only you can see. Create a funded
+   testnet dev account in one click (key generated in the browser); the lit
+   block fills in. Press *wrap 1 NEAR* and *get 100 USDC.e*: real testnet
+   tokens.
 4. **Into the shade, and a private transfer (45 s).** Shield 0.5 wNEAR: a
    mote of light crosses the seam, the shielded balance unveils; the log shows
    the public amount and commitment, the explorer shows an `ft_transfer_call`

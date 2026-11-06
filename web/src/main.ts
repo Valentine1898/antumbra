@@ -202,66 +202,97 @@ function summary(): any {
   return JSON.parse(wasm.wallet_summary(walletJson!));
 }
 
-// ---------- the ledger: every token's lit part and shaded part ----------
-interface LedgerRow { el: HTMLElement; lit: HTMLElement; shaded: HTMLElement; part: HTMLElement; edge: HTMLElement; pct: HTMLElement }
-const ledgerRows = new Map<number, LedgerRow>();
+/// A wallet's notes, swaps and leaf cache belong to one pool; on another pool they are
+/// meaningless and the cache would even yield wrong Merkle paths. Keys are kept.
+function forgetPoolState(reason: string) {
+  const w = JSON.parse(walletJson!);
+  w.notes = [];
+  w.swaps = [];
+  w.leaves = [];
+  saveWallet(JSON.stringify(w));
+  batchCleared.clear();
+  lastRender = '';
+  log(`${reason}: keys kept, notes and the leaf cache forgotten, rescanning this pool`, { geek: true });
+}
 
-function ledgerRow(t: Token): LedgerRow {
-  let row = ledgerRows.get(t.assetId);
-  if (row) return row;
+/// Binds the wallet to the pool in deployment.json. A wallet that followed another pool
+/// (a redeploy, or an imported file) is detected by its first cached leaf.
+async function adoptPool() {
+  const known = local.get('pool');
+  if (known !== deployment.pool) {
+    const w = JSON.parse(walletJson!);
+    if (Array.isArray(w.leaves) && w.leaves.length > 0) {
+      let stale = known !== null;
+      if (!stale) {
+        const first = await chain.leaves(0, 1).catch(() => null);
+        stale = first !== null && (first.length === 0 || first[0].cm !== w.leaves[0]);
+      }
+      if (stale) forgetPoolState('this wallet followed another pool');
+    }
+    local.set('pool', deployment.pool);
+  }
+}
+
+// ---------- the two realms: what NEAR sees of you, and what only you can see ----------
+interface RealmRow { el: HTMLElement; amt: HTMLElement; extra: HTMLElement }
+const lightRows = new Map<number, RealmRow>();
+const shadeRows = new Map<number, RealmRow>();
+let gasRow: RealmRow | null = null;
+
+function realmRow(container: HTMLElement, cls: string, symbol: string): RealmRow {
   const el = document.createElement('div');
-  el.className = 'lrow';
-  el.innerHTML =
-    `<div class="lit"><span class="amount"></span><span class="sym">${t.symbol}</span></div>` +
-    `<div class="term" title="how much of this token is in the light and how much is in the shade"><div class="track"><i class="lit-part"></i></div><i class="edge"></i><span class="pct"></span></div>` +
-    `<div class="shaded"><span class="amount"></span><span class="sym">${t.symbol}</span></div>`;
-  row = {
-    el,
-    lit: el.querySelector('.lit .amount')!,
-    shaded: el.querySelector('.shaded .amount')!,
-    part: el.querySelector('.lit-part')!,
-    edge: el.querySelector('.edge')!,
-    pct: el.querySelector('.pct')!,
-  };
-  ledgerRows.set(t.assetId, row);
-  $('ledger-rows').appendChild(el);
-  return row;
+  el.className = `brow ${cls}`.trim();
+  el.innerHTML = `<span class="amt"></span><span class="sym">${symbol}</span><span class="spacer"></span><span class="extra"></span>`;
+  container.appendChild(el);
+  return { el, amt: el.querySelector('.amt')!, extra: el.querySelector('.extra')! };
 }
 
 let lastActions = '';
-function renderLedger() {
-  $('light-account').textContent = signer
-    ? `${signer.accountId}${nearBalance ? ` · ${fromBase(nearBalance, 24, 2)} NEAR for gas` : ''}`
-    : 'nobody is paying gas yet; choose who does (top right) and this side fills in';
+function renderRealms() {
+  // In the light: the gas payer's account and its public balances.
+  $('light-account').textContent = signer ? signer.accountId : 'nobody is paying gas yet';
+  $('light-account').title = signer?.accountId ?? '';
+  const lightBox = $('light-rows');
+  if (!gasRow) {
+    gasRow = realmRow(lightBox, 'gas', 'NEAR');
+    gasRow.extra.className = 'note';
+    gasRow.extra.textContent = 'for gas';
+  }
+  gasRow.amt.textContent = signer && nearBalance ? fromBase(nearBalance, 24, 2) : '·';
+  gasRow.el.classList.toggle('hidden', !signer);
   const shade = new Map<number, bigint>();
   if (walletJson) for (const x of summary().balances) shade.set(x.asset_id, BigInt(x.amount));
-  for (const t of tokens) {
-    const row = ledgerRow(t);
-    const lit = BigInt(publicBalances[t.account] ?? '0');
-    const sh = shade.get(t.assetId) ?? 0n;
-    const total = lit + sh;
-    row.lit.textContent = signer ? fromBase(lit, t.decimals) : '·';
-    row.shaded.textContent = fromBase(sh, t.decimals);
-    const litShare = total === 0n ? 0 : Number((lit * 1000n) / total) / 1000;
-    row.part.style.width = `${(litShare * 100).toFixed(1)}%`;
-    row.edge.style.left = `${(litShare * 100).toFixed(1)}%`;
-    row.pct.textContent = total === 0n ? '' : `${Math.round((1 - litShare) * 100)}% in the shade`;
-    row.el.classList.toggle('empty', total === 0n);
-  }
   const actionsKey = `${signer?.accountId ?? ''}|${tokens.map((t) => t.symbol).join()}`;
-  if (actionsKey !== lastActions) {
-    lastActions = actionsKey;
-    const acts = $('light-actions');
-    acts.innerHTML = '';
-    if (signer) {
-      for (const t of tokens) {
+  const rebuildActions = actionsKey !== lastActions;
+  lastActions = actionsKey;
+  for (const t of tokens) {
+    let row = lightRows.get(t.assetId);
+    if (!row) { row = realmRow(lightBox, '', t.symbol); lightRows.set(t.assetId, row); }
+    const lit = BigInt(publicBalances[t.account] ?? '0');
+    row.amt.textContent = signer ? fromBase(lit, t.decimals) : '·';
+    row.el.classList.toggle('empty', lit === 0n);
+    if (rebuildActions) {
+      row.extra.innerHTML = '';
+      if (signer) {
         const btn = document.createElement('button');
         btn.className = 'ghost tiny';
         btn.textContent = t.wrapsNear ? 'wrap 1 NEAR' : `get 100 ${t.symbol}`;
         btn.addEventListener('click', () => void busy(btn, () => (t.wrapsNear ? wrapNear(t) : mintTest(t))));
-        acts.appendChild(btn);
+        row.extra.appendChild(btn);
       }
     }
+  }
+  // In the shade: the shielded balances, with the share of each token that is here.
+  const shadeBox = $('shade-rows');
+  for (const t of tokens) {
+    let row = shadeRows.get(t.assetId);
+    if (!row) { row = realmRow(shadeBox, '', t.symbol); shadeRows.set(t.assetId, row); }
+    const sh = shade.get(t.assetId) ?? 0n;
+    const lit = BigInt(publicBalances[t.account] ?? '0');
+    const total = lit + sh;
+    row.amt.textContent = fromBase(sh, t.decimals);
+    row.el.classList.toggle('empty', sh === 0n);
+    row.extra.innerHTML = total > 0n && signer ? `<span class="share" title="share of your ${t.symbol} that is in the shade">${Math.round(Number((sh * 1000n) / total) / 10)}% here</span>` : '';
   }
 }
 
@@ -269,7 +300,7 @@ async function refreshLight() {
   if (!signer) {
     nearBalance = null;
     publicBalances = {};
-    renderLedger();
+    renderRealms();
     return;
   }
   const [near, ...bals] = await Promise.all([
@@ -278,7 +309,7 @@ async function refreshLight() {
   ]);
   nearBalance = near;
   tokens.forEach((t, i) => { publicBalances[t.account] = bals[i]; });
-  renderLedger();
+  renderRealms();
 }
 
 let lastRender = '';
@@ -291,7 +322,7 @@ function renderWallet() {
   const s = JSON.parse(summaryJson);
   $('address').textContent = s.address;
   $('address-short').textContent = shortAddress(s.address);
-  renderLedger();
+  renderRealms();
 
   const sw = $('swaps');
   sw.innerHTML = '';
@@ -343,6 +374,10 @@ async function sync(verbose = true) {
   try {
     const total = await chain.leafCount();
     let from = summary().leaves as number;
+    if (from > total) {
+      forgetPoolState('the leaf cache is ahead of the pool');
+      from = 0;
+    }
     let newNotes = 0, newSwaps = 0;
     while (from < total) {
       const page = await chain.leaves(from, 50);
@@ -754,12 +789,13 @@ async function main() {
   $('pool-id').textContent = deployment.pool;
   $('pool-id').title = deployment.pool;
   ensureWallet();
+  await adoptPool();
   await loadTokens();
   for (const id of ['move-token', 'swap-sell']) {
     const sel = $(id) as HTMLSelectElement;
     for (const t of tokens) sel.add(new Option(t.symbol, String(t.assetId)));
   }
-  renderLedger();
+  renderRealms();
 
   document.querySelectorAll<HTMLButtonElement>('.routes button').forEach((b) => b.addEventListener('click', () => setRoute(b.dataset.route as Route)));
   $('move-amount').addEventListener('input', updateMoveButton);
@@ -785,6 +821,8 @@ async function main() {
     if (!f) return;
     saveWallet(await f.text());
     log('wallet imported');
+    local.del('pool');
+    await adoptPool();
     await sync();
   });
   $('reset-wallet').addEventListener('click', () => {

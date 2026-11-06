@@ -97,11 +97,13 @@ deployment in `deployment.json` through public RPC endpoints (FastNEAR first,
 then two others; each limits requests per IP, so the page fails over). Add
 `?rpc=https://…` to the URL to put your own endpoint first.
 
-The ledger at the top shows every token twice: its lit part (**in the
-light**, what NEAR sees in your account) and its shaded part (**in the
-shade**, your shielded balance, which only you can see), with the terminator
-between them. Two pages work on it: **Threshold** moves value into, out of or
-within the shade; **Swap** trades inside it. The testnet pool trades real
+The card on the left shows your two realms: **in the light**, the NEAR
+account that pays gas and what it holds in public; **in the shade**, your
+shielded address and balances, which only you can see, with the share of each
+token that is in the shade. Two pages work on them: **Threshold** moves value
+into, out of or within the shade; **Swap** trades inside it. A wallet is bound
+to the pool it scans; after a redeploy it forgets its notes and rescans (keys
+stay). The testnet pool trades real
 testnet tokens: `wrap.testnet` (wNEAR) and `usdc.fakes.testnet` (USDC.e, the
 test stablecoin NEAR's DEXes use).
 
@@ -112,8 +114,8 @@ test stablecoin NEAR's DEXes use).
    USDC.e* mints from the test faucet.
 2. **Threshold → Into the shade.** Shield 0.5 wNEAR: the amount and a note
    commitment go on-chain, nothing says who owns the note. A mote of light
-   crosses the terminator and the token's bar in the ledger slides into the
-   shade.
+   crosses from the lit block to the shaded one and the shielded balance
+   appears there.
 3. **Swap page.** Sell 0.1 wNEAR: while you type, the page shows what the
    batch's net leg would fetch on NEAR Intents (a live 1Click quote at mainnet
    prices; nothing moves on testnet). Press *Seal and swap*: the proof is

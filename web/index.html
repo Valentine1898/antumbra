@@ -17,11 +17,13 @@
     <div class="grain" aria-hidden="true"></div>
 
     <header class="bar">
-      <a class="wordmark" href="#threshold"><span class="eclipse" aria-hidden="true"></span>Antumbra</a>
-      <nav class="pages" aria-label="Pages">
-        <a href="#threshold" data-page="threshold" class="active">Threshold</a>
-        <a href="#swap" data-page="swap">Swap</a>
-      </nav>
+      <div class="bar-left">
+        <a class="wordmark" href="#threshold"><span class="eclipse" aria-hidden="true"></span>Antumbra</a>
+        <nav class="pages" aria-label="Pages">
+          <a href="#threshold" data-page="threshold" class="active">Threshold</a>
+          <a href="#swap" data-page="swap">Swap</a>
+        </nav>
+      </div>
       <div class="bar-right">
         <button id="signer-pill" class="pill" title="Who pays gas for your transactions">choose who pays gas</button>
         <label class="mode" title="Calm hides the machinery; Geek shows everything the chain sees">
@@ -34,54 +36,57 @@
     </header>
 
     <main class="stage">
-      <!-- The ledger: every token has a lit part NEAR can see and a shaded part only you can see. -->
-      <section class="ledger reveal">
-        <div class="ledger-head">
-          <div class="side light">
+      <!-- The two realms: what NEAR sees of you, and what only you can see. -->
+      <aside class="side-col">
+        <section class="realms reveal">
+          <div class="realm light">
             <p class="eyebrow">In the light <span class="muted">· what NEAR sees</span></p>
             <div id="light-account" class="who mono"></div>
+            <div id="light-rows" class="rows"></div>
+            <div id="light-actions" class="row"></div>
           </div>
-          <div class="side shade">
+          <i class="terminator" aria-hidden="true"></i>
+          <i id="crossing" class="crossing" aria-hidden="true"></i>
+          <div class="realm shade">
             <p class="eyebrow">In the shade <span class="muted">· only you can see this</span></p>
-            <div class="who"><code id="address-short" title="click to copy"></code></div>
-          </div>
-        </div>
-        <i id="crossing" class="crossing" aria-hidden="true"></i>
-        <div id="ledger-rows" class="ledger-rows"></div>
-        <div class="ledger-foot">
-          <div id="light-actions" class="row"></div>
-          <span class="spacer"></span>
-          <span id="sync-status" class="muted small"></span>
-          <button id="sync" class="icon-btn" title="Sync with the pool" aria-label="Sync">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
-          </button>
-        </div>
-      </section>
-      <p id="toast" class="toast" aria-live="polite"></p>
-
-      <!-- Page: the threshold. Everything that crosses between the realms, or moves inside the shade. -->
-      <section id="page-threshold" class="page">
-        <section class="panel threshold reveal">
-          <nav class="routes" aria-label="Direction">
-            <button data-route="in" class="active"><span class="arrow">→</span>Into the shade</button>
-            <button data-route="out"><span class="arrow">←</span>Out of the shade</button>
-            <button data-route="send"><span class="arrow">↝</span>To another shade</button>
-          </nav>
-          <form id="form-move" data-route="in">
-            <p id="move-hint" class="hint"></p>
-            <div class="fields">
-              <label>Amount <input id="move-amount" inputmode="decimal" placeholder="0.5" autocomplete="off" /></label>
-              <label>Token <select id="move-token"></select></label>
+            <div class="who"><code id="address-short" title="your shielded address, click to copy"></code></div>
+            <div id="shade-rows" class="rows"></div>
+            <div class="realm-foot">
+              <span id="sync-status" class="muted small"></span>
+              <span class="spacer"></span>
+              <button id="sync" class="icon-btn" title="Sync with the pool" aria-label="Sync">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+              </button>
             </div>
-            <label id="move-to-wrap" class="hidden"><span id="move-to-label"></span> <input id="move-to" autocomplete="off" /></label>
-            <button type="submit" id="move-submit" class="primary">Shield</button>
-          </form>
+          </div>
         </section>
-      </section>
+      </aside>
 
-      <!-- Page: swaps in the shade. -->
-      <section id="page-swap" class="page hidden">
-        <div class="two">
+      <div class="main-col">
+        <p id="toast" class="toast" aria-live="polite"></p>
+
+        <!-- Page: the threshold. Everything that crosses between the realms, or moves inside the shade. -->
+        <section id="page-threshold" class="page">
+          <section class="panel threshold reveal">
+            <nav class="routes" aria-label="Direction">
+              <button data-route="in" class="active"><span class="arrow">→</span>Into the shade</button>
+              <button data-route="out"><span class="arrow">←</span>Out of the shade</button>
+              <button data-route="send"><span class="arrow">↝</span>To another shade</button>
+            </nav>
+            <form id="form-move" data-route="in">
+              <p id="move-hint" class="hint"></p>
+              <div class="fields">
+                <label>Amount <input id="move-amount" inputmode="decimal" placeholder="0.5" autocomplete="off" /></label>
+                <label>Token <select id="move-token"></select></label>
+              </div>
+              <label id="move-to-wrap" class="hidden"><span id="move-to-label"></span> <input id="move-to" autocomplete="off" /></label>
+              <button type="submit" id="move-submit" class="primary">Shield</button>
+            </form>
+          </section>
+        </section>
+
+        <!-- Page: swaps in the shade. -->
+        <section id="page-swap" class="page hidden">
           <section class="panel swapdeck reveal">
             <div class="panel-head"><h3>Swap in the shade</h3><span id="epoch-pill" class="muted small mono"></span></div>
             <form id="form-swap">
@@ -100,13 +105,13 @@
             <div class="panel-head"><h3>Your swaps</h3><span class="muted small">sealed → cleared → claimed</span></div>
             <div id="swaps" class="swap-cards"></div>
           </section>
-        </div>
-      </section>
+        </section>
 
-      <section class="panel activity reveal">
-        <div class="panel-head"><h3>Activity</h3><span id="keys-status" class="muted small"></span></div>
-        <ol id="log"></ol>
-      </section>
+        <section class="panel activity reveal">
+          <div class="panel-head"><h3>Activity</h3><span id="keys-status" class="muted small"></span></div>
+          <ol id="log"></ol>
+        </section>
+      </div>
 
       <section class="geek-grid geek-only">
         <section class="panel">
