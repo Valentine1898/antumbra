@@ -48,6 +48,14 @@ the log panel; the CLI (`scripts/demo.sh`) is the fallback.
 Use `scripts/demo.sh deployment.json` for a dry run; it prints every command's
 gas and the pool state.
 
+## Recording it
+
+`scripts/video/` records this flow by itself: a Playwright Chromium drives the
+wallet against the testnet pool with a drawn cursor, then `compose.py` adds
+the intro and outro cards and the step captions and speeds up the wait for
+the sealer. See `scripts/video/README.md`; the result is a 1080p MP4 just
+over two minutes long.
+
 ## X post (required by the submission form)
 
 > Built at NEAR HACKATHON: Antumbra, a shielded pool with batch swaps on

@@ -1,0 +1,10 @@
+{
+  "name": "antumbra-video",
+  "private": true,
+  "type": "module",
+  "description": "Records the Antumbra demo in a Playwright Chromium and composes the product video",
+  "dependencies": {
+    "near-api-js": "^7.4.0",
+    "playwright": "^1.65.0"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "realms":  { "n": "1", "text": "What NEAR sees of you, and what <em>only you</em> can see" },
+  "tokens":  { "n": "2", "text": "Real testnet tokens: wrap NEAR, get USDC.e" },
+  "shield":  { "n": "3", "text": "Shield: the chain sees an amount and a commitment, <em>never the owner</em>" },
+  "swap":    { "n": "4", "text": "Swap in the shade: the amount is <em>sealed</em>; NEAR Intents quotes the batch's net leg" },
+  "proof":   { "n": "5", "text": "One Groth16 proof, built in your browser in about three seconds" },
+  "sealer":  { "n": "6", "text": "The epoch ends; the sealer opens the batch and clears it at <em>one price for everyone</em>", "fast": true },
+  "claim":   { "n": "7", "text": "Claimed automatically: the USDC.e lands as a <em>private note</em>" },
+  "unshield":{ "n": "8", "text": "Out of the shade: withdraw to any NEAR account" }
+}

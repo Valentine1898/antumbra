@@ -34,3 +34,6 @@ antumbra-wallet*.json
 
 # Personal working notes, kept out of the public repo
 /HACKATHON-NOTES.md
+
+# demo recordings are published on X, not in git
+docs/demo/
