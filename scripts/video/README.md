@@ -20,6 +20,12 @@ S=/tmp URL=http://localhost:4173/ ACCOUNT_FILE=/tmp/demo-account.secret.json VID
 
 # compose: H.264 1080p30 with a silent track, under X's limit
 python3 compose.py /tmp/take /tmp/overlays /tmp/antumbra-product.mp4
+
+# the product cut: animated cards (cards.mjs), a neural voice-over (narration.json through
+# edge-tts in a virtualenv), camera moves on key moments, a quiet synthesized bed ducked under the voice
+OUT=/tmp/cards W=1920 H=1080 node cards.mjs
+python3 -m venv /tmp/tts && /tmp/tts/bin/pip install edge-tts && PATH=/tmp/tts/bin:$PATH python3 voice.py narration.json /tmp/voice
+python3 compose2.py /tmp/take /tmp/overlays /tmp/cards /tmp/voice /tmp/antumbra-product.mp4
 ```
 
 `record.mjs` seeds the gas payer into localStorage so the video opens

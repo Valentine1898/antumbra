@@ -1,0 +1,12 @@
+{
+  "intro":    { "at": "intro", "text": "Antumbra is a shielded pool with batch swaps on NEAR. Every action is a single Groth16 proof, verified on chain." },
+  "realms":   { "at": "realms", "text": "On the left, your NEAR account in the light, and your shielded balance in the shade, which only you can see." },
+  "tokens":   { "at": "tokens", "text": "We wrap a little NEAR and pick up some test USDC." },
+  "shield":   { "at": "shield", "text": "Shielding moves tokens into the shade. The chain sees an amount and a commitment, never who owns it." },
+  "swap":     { "at": "swap", "text": "Swaps happen inside the shade. The amount is sealed, so not even the chain learns it. And while you type, NEAR Intents quotes what the batch's net leg would fetch on mainnet." },
+  "proof":    { "at": "proof", "text": "One proof, built in your browser in about three seconds, and the swap is sealed into this epoch's batch." },
+  "sealer":   { "at": "sealer", "text": "When the epoch ends, the sealer opens the batch and clears it, so everyone in the batch gets the same price." },
+  "claim":    { "at": "claim", "text": "The claim is automatic. Your share arrives as a private note." },
+  "unshield": { "at": "unshield", "text": "And whenever you like, step back into the light: withdraw to any NEAR account." },
+  "outro":    { "at": "outro", "text": "Antumbra. Built at NEAR Hackathon." }
+}
