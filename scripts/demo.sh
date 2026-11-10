@@ -68,7 +68,7 @@ step "waiting for the epoch to end and the sealer to clear it, then claiming"
 # With the sealer's secrets in the secret file (any deployment made by `deploy`)
 # this clears the epoch itself. Otherwise the pool's own sealer does: within
 # seconds while its operator runs scripts/sealer.sh, within minutes when only
-# the scheduled workflow is clearing the hosted pool. SEALER_WAIT (seconds,
+# the sealer workflow is clearing the hosted pool. SEALER_WAIT (seconds,
 # default 1800) is how long to wait for it.
 SEALER_WAIT="${SEALER_WAIT:-1800}"
 DEADLINE=$(( $(date +%s) + SEALER_WAIT ))
@@ -82,7 +82,7 @@ while :; do
     *"not cleared"*)
       if [ "$SEEN" != cleared ]; then
         echo "$STATE"
-        echo "waiting for the pool's sealer (up to $((SEALER_WAIT / 60)) min; the hosted pool is cleared on a schedule, every few minutes)"
+        echo "waiting for the pool's sealer (up to $((SEALER_WAIT / 60)) min; the hosted pool is cleared by a workflow every few minutes)"
         SEEN=cleared
       fi ;;
     *) echo "$STATE" ;;

@@ -152,7 +152,7 @@ Build the CLI and run the demo:
    waits for the epoch and the sealer, claims and withdraws the bought USDC.e,
    printing gas and the pool state at each step. The wait for the sealer is
    the only slow part: seconds while the pool's operator runs a sealer, up to
-   several minutes when only the scheduled workflow is clearing the pool. On a deployment with test
+   several minutes when only the sealer workflow is clearing the pool. On a deployment with test
    tokens it mints them instead (`antumbra mint` is open to anyone).
 
 Or deploy your own copy and run against it:
@@ -177,9 +177,10 @@ antumbra route plan --pair 1 --epoch <cleared epoch>  # how that batch would hav
 `deploy` generates the sealer keys, registers them and writes them to
 `deployment.secret.json`, which is ignored by git and must be kept: without
 it nobody can clear that pool's swaps. The pool behind the hosted wallet is
-also cleared by a scheduled workflow (`.github/workflows/sealer.yml`, every
-few minutes, keys in a repository secret), so a swap made there can always
-be claimed, a little later than with a sealer running next to it. `deploy --token wrap.testnet
+also cleared by a workflow (`.github/workflows/sealer.yml`, keys in a
+repository secret) that runs every few minutes and starts its own next run,
+so a swap made there can always be claimed, a little later than with a
+sealer running next to it. `deploy --token wrap.testnet
 --token usdc.fakes.testnet --liquidity <wNEAR base units> --liquidity <USDC.e
 base units>` registers existing NEP-141 tokens instead of deploying test ones
 (the deployer must hold the liquidity: `antumbra wrap --amount <yocto>` wraps

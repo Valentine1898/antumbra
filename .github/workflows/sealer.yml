@@ -2,18 +2,26 @@ name: Sealer
 
 # Clears the finished epochs of the testnet pool in deployment.json, so swaps
 # made in the hosted wallet can be claimed even when nobody is running
-# scripts/sealer.sh. GitHub starts scheduled runs every five minutes at best
-# and often later, so each run scans back to the start of the last run that
-# succeeded: however late a run is, no epoch is skipped. A sealer running
-# locally clears an epoch within seconds, and the two do not conflict.
-# The sealer's keys are the repository secret ANTUMBRA_SEALER_SECRET: the
-# contents of deployment.secret.json (the pool account's own key is not used
-# and can be left empty).
+# scripts/sealer.sh. A sealer running locally clears an epoch within seconds;
+# this one gets to it within a few minutes, and the two do not conflict.
+#
+# The workflow keeps itself going. GitHub's scheduler did not start a single
+# run of it in its first six hours, so each run ends by starting the next:
+# the `next` job waits out the timer of the `sealer-pause` environment (four
+# minutes; a waiting job occupies no runner) and dispatches the workflow
+# again. The schedule below is only a watchdog that restarts a broken chain.
+# To start the chain by hand: gh workflow run sealer.yml
+# To stop it: disable the workflow, or cancel the run that is waiting.
+#
+# Each run scans back to the start of the last run that succeeded, so however
+# late a run is, no epoch is skipped. The sealer's keys are the repository
+# secret ANTUMBRA_SEALER_SECRET: the contents of deployment.secret.json (the
+# pool account's own key is not used and can be left empty). The environment
+# is repository configuration, made once:
+#   gh api -X PUT repos/OWNER/REPO/environments/sealer-pause -F wait_timer=4
 on:
   schedule:
-    # Every five minutes, off the round minutes: GitHub delays and drops
-    # scheduled runs most at :00, :05, :10 and so on, where everyone's are.
-    - cron: "3-59/5 * * * *"
+    - cron: "17,47 * * * *"
   workflow_dispatch:
     inputs:
       lookback:
@@ -21,18 +29,18 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read
-  actions: read
-
-concurrency:
-  group: sealer
-  cancel-in-progress: false
+permissions: {}
 
 jobs:
   clear:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: sealer
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - name: Restore the CLI
@@ -70,6 +78,8 @@ jobs:
           # How far back to look. An epoch is 20 blocks, about 12 seconds; counting
           # 9 seconds per epoch and adding 60 more errs on the side of rescanning,
           # which also catches a swap that landed minutes after it was proved.
+          # A long window is cheap: the sealer first asks the chain whether the
+          # pool changed at all, and probes epochs only around the changes.
           if [[ "$LOOKBACK" =~ ^[0-9]+$ ]]; then
             lookback=$LOOKBACK
           else
@@ -94,4 +104,37 @@ jobs:
             echo "clearing through $rpc failed; trying the next endpoint"
             sleep 15
           done
+          exit 1
+
+  next:
+    # Starts the next run once the environment's wait timer has passed. Only
+    # the newest run does, so runs started by hand or by the schedule join the
+    # one chain instead of starting more.
+    needs: clear
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+    environment:
+      name: sealer-pause
+      deployment: false
+    steps:
+      - name: Start the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/sealer.yml/runs?per_page=1" --jq '.workflow_runs[0].id // empty' || true)
+          if [ -n "$newest" ] && [ "$newest" != "$GITHUB_RUN_ID" ]; then
+            echo "run $newest is newer and carries on from here"
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/sealer.yml/dispatches" -f ref="$GITHUB_REF_NAME"; then
+              echo "started the next run"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::could not start the next run; start the chain again with: gh workflow run sealer.yml"
           exit 1
