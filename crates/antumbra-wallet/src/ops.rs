@@ -1,7 +1,7 @@
 //! Native, network-aware operations for the CLI: fetch, prepare, submit, record.
 
 use crate::{
-    chain::{describe, ensure_ok, Chain},
+    chain::{describe, ensure_ok, Chain, EpochInfo},
     proving::ProvingKeys,
     pure::{self, LeafData, Rng},
     state::{Address, WalletFile},
@@ -233,23 +233,91 @@ pub async fn clear_epoch(
     })
 }
 
-/// Clears every finished epoch of a pair that still has an open batch; returns what it cleared.
+/// Clears every finished batch of a pair that still waits among the last
+/// `lookback` epochs; returns what it cleared.
+///
+/// Probing costs one view call per epoch, and a public RPC endpoint cuts a
+/// client off after a few hundred calls in a row, so a long window is
+/// narrowed first. A swap adds two leaves to the tree: where the leaf count
+/// stood still, no batch can be waiting. The count from just before the
+/// window is read from the chain's history. If nothing was added since, there
+/// is nothing to clear; otherwise the scan starts shortly before the first
+/// addition.
 pub async fn clear_pending(
     chain: &Chain,
     secrets: &SealerSecrets,
     pair_id: u32,
     lookback: u64,
 ) -> Result<Vec<Cleared>> {
-    let now = chain.current_epoch().await?.epoch;
+    let now = chain.current_epoch().await?;
+    let mut from = now.epoch.saturating_sub(lookback);
+    if now.epoch - from > PLAIN_SCAN {
+        match growth_since(chain, from, &now).await? {
+            Growth::None => return Ok(vec![]),
+            Growth::From(epoch) => from = from.max(epoch.saturating_sub(LATE_EPOCHS)),
+            Growth::Unknown => {}
+        }
+    }
+    let paced = now.epoch - from > PLAIN_SCAN;
     let mut out = vec![];
-    for epoch in now.saturating_sub(lookback)..now {
+    for epoch in from..now.epoch {
         if let Some(b) = chain.get_batch(epoch, pair_id).await? {
             if !b.executed && b.entries > 0 {
                 out.push(clear_epoch(chain, secrets, pair_id, epoch).await?);
             }
         }
+        if paced {
+            tokio::time::sleep(PROBE_PAUSE).await;
+        }
     }
     Ok(out)
+}
+
+/// A scan no longer than this many epochs simply probes each of them.
+const PLAIN_SCAN: u64 = 64;
+/// A swap names the epoch it was proved for and may land later, after a slow
+/// wallet approval. This many epochs, about twelve minutes, are allowed
+/// between the two.
+const LATE_EPOCHS: u64 = 60;
+/// Pause between the probes of a long scan, to stay under RPC rate limits.
+const PROBE_PAUSE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// What the chain's history says about the note tree since an epoch began.
+enum Growth {
+    /// No leaf was added.
+    None,
+    /// The first leaf was added in this epoch or later.
+    From(u64),
+    /// The node keeps no state that far back.
+    Unknown,
+}
+
+/// Finds where the tree first grew since `from_epoch` began, by bisecting the
+/// leaf count over past blocks: a handful of view calls for any window.
+async fn growth_since(chain: &Chain, from_epoch: u64, now: &EpochInfo) -> Result<Growth> {
+    // Epoch e covers the blocks e * len .. (e + 1) * len.
+    let len = ((now.block_height + now.blocks_left) / (now.epoch + 1)).max(1);
+    let count = chain.leaf_count().await?;
+    // A view at a block shows what the blocks before it left behind, so the
+    // base is read a whole epoch early: that can only widen the scan.
+    let mut lo = from_epoch.saturating_sub(1) * len;
+    let Some(base) = chain.leaf_count_at(lo).await? else {
+        return Ok(Growth::Unknown);
+    };
+    if base >= count {
+        return Ok(Growth::None);
+    }
+    // The count at `lo` is still `base`; at `hi` it is higher.
+    let mut hi = now.block_height;
+    while hi > lo && hi - lo > len {
+        let mid = lo + (hi - lo) / 2;
+        match chain.leaf_count_at(mid).await? {
+            Some(c) if c > base => hi = mid,
+            Some(_) => lo = mid,
+            None => break,
+        }
+    }
+    Ok(Growth::From(lo / len))
 }
 
 #[derive(Debug)]

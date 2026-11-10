@@ -8,7 +8,16 @@ use near_workspaces::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
+
+/// Seconds to wait before asking again after an endpoint answers that the
+/// client is over its rate limit; after the last wait the error is returned.
+const RATE_LIMIT_WAITS: [u64; 4] = [15, 30, 45, 60];
+
+fn rate_limited(e: &anyhow::Error) -> bool {
+    let text = format!("{e:#}").to_lowercase();
+    text.contains("rate limit") || text.contains("too many requests")
+}
 
 pub struct Chain {
     pub account: Account,
@@ -99,12 +108,41 @@ impl Chain {
     }
 
     pub async fn view<T: DeserializeOwned>(&self, method: &str, args: Value) -> Result<T> {
-        Ok(self
-            .account
-            .view(&self.pool, method)
-            .args_json(args)
-            .await?
-            .json()?)
+        self.view_at(method, args, None).await
+    }
+
+    /// A view call against the latest state, or against the state at `height`.
+    /// Public endpoints cut a client off after a burst of calls; when one
+    /// does, this waits and asks again instead of failing.
+    async fn view_at<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        args: Value,
+        height: Option<u64>,
+    ) -> Result<T> {
+        let mut waits = RATE_LIMIT_WAITS.iter();
+        loop {
+            let query = self
+                .account
+                .view(&self.pool, method)
+                .args_json(args.clone());
+            let query = match height {
+                Some(h) => query.block_height(h),
+                None => query,
+            };
+            match query.await {
+                Ok(r) => return Ok(r.json()?),
+                Err(e) => {
+                    let e = anyhow::Error::from(e);
+                    match waits.next() {
+                        Some(secs) if rate_limited(&e) => {
+                            tokio::time::sleep(Duration::from_secs(*secs)).await
+                        }
+                        _ => return Err(e),
+                    }
+                }
+            }
+        }
     }
 
     /// Pool call with 150 Tgas: enough for any proof-carrying method (the
@@ -157,6 +195,20 @@ impl Chain {
 
     pub async fn leaf_count(&self) -> Result<u64> {
         self.view("leaf_count", json!({})).await
+    }
+
+    /// The leaf count as the pool stood at `height` (or at the next block,
+    /// when that height was skipped). `None` when the node keeps no state for
+    /// it: only a few days of history are held outside archival nodes.
+    pub async fn leaf_count_at(&self, height: u64) -> Result<Option<u64>> {
+        for h in height..height + 4 {
+            match self.view_at("leaf_count", json!({}), Some(h)).await {
+                Ok(n) => return Ok(Some(n)),
+                Err(e) if rate_limited(&e) => return Err(e),
+                Err(_) => continue,
+            }
+        }
+        Ok(None)
     }
 
     pub async fn get_root(&self) -> Result<String> {
