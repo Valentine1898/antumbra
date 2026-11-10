@@ -3,16 +3,25 @@ name: Sealer
 # Clears the finished epochs of the testnet pool in deployment.json, so swaps
 # made in the hosted wallet can be claimed even when nobody is running
 # scripts/sealer.sh. GitHub starts scheduled runs every five minutes at best
-# and often later; a sealer running locally clears an epoch within seconds,
-# and the two do not conflict. The sealer's keys are the repository secret
-# ANTUMBRA_SEALER_SECRET (the contents of deployment.secret.json).
+# and often later, so each run scans back to the start of the last run that
+# succeeded: however late a run is, no epoch is skipped. A sealer running
+# locally clears an epoch within seconds, and the two do not conflict.
+# The sealer's keys are the repository secret ANTUMBRA_SEALER_SECRET: the
+# contents of deployment.secret.json (the pool account's own key is not used
+# and can be left empty).
 on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      lookback:
+        description: "Epochs to scan back (empty: since the last successful run)"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: sealer
@@ -44,12 +53,42 @@ jobs:
       - name: Clear finished epochs
         env:
           SEALER_SECRET: ${{ secrets.ANTUMBRA_SEALER_SECRET }}
+          LOOKBACK: ${{ inputs.lookback }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$SEALER_SECRET" ]; then echo "::error::the ANTUMBRA_SEALER_SECRET repository secret is not set"; exit 1; fi
+          trap 'rm -f deployment.secret.json' EXIT
           printf '%s' "$SEALER_SECRET" > deployment.secret.json
+          # The secret is one JSON document; keep each key in it out of the log too.
+          for field in deployer_key sealer_seed executor_key; do
+            value=$(jq -r --arg f "$field" '.[$f] // empty' deployment.secret.json)
+            if [ -n "$value" ]; then echo "::add-mask::$value"; fi
+          done
+
+          # How far back to look. An epoch is 20 blocks, about 12 seconds; counting
+          # 9 seconds per epoch and adding 60 more errs on the side of rescanning,
+          # which also catches a swap that landed minutes after it was proved.
+          if [[ "$LOOKBACK" =~ ^[0-9]+$ ]]; then
+            lookback=$LOOKBACK
+          else
+            last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow sealer.yml --status success --limit 1 --json createdAt --jq '.[0].createdAt // empty' || true)
+            if [ -n "$last" ]; then
+              gap=$(( $(date +%s) - $(date -d "$last" +%s) ))
+              lookback=$(( gap / 9 + 60 ))
+              echo "last successful run started $(( gap / 60 )) min ago"
+            else
+              lookback=300
+            fi
+            if [ "$lookback" -gt 1500 ]; then
+              echo "::warning::scanning the last 1500 epochs only; run this workflow by hand with a larger lookback to reach older ones"
+              lookback=1500
+            fi
+          fi
+          echo "scanning the last $lookback epochs"
+
           pair=$(jq -r .pair_id deployment.json)
           for rpc in https://test.rpc.fastnear.com https://rpc.testnet.near.org https://test.rpc.fastnear.com; do
-            if sealer-bin/antumbra --network testnet --rpc "$rpc" sealer clear --pair "$pair" --lookback 120; then exit 0; fi
+            if sealer-bin/antumbra --network testnet --rpc "$rpc" sealer clear --pair "$pair" --lookback "$lookback"; then exit 0; fi
             echo "clearing through $rpc failed; trying the next endpoint"
             sleep 15
           done
