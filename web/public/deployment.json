@@ -1,10 +1,10 @@
 {
   "network": "testnet",
-  "pool": "pool-afb31c.dev-20261105111746-77978043288771.testnet",
+  "pool": "pool-cc4635.antumbra-ops-20261110142043.testnet",
   "tokens": [
     "wrap.testnet",
     "usdc.fakes.testnet"
   ],
   "pair_id": 1,
-  "deployer": "dev-20261105111746-77978043288771.testnet"
+  "deployer": "antumbra-ops-20261110142043.testnet"
 }

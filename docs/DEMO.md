@@ -58,17 +58,63 @@ over two minutes long.
 
 ## X post (required by the submission form)
 
-> Built at NEAR HACKATHON: Antumbra, a shielded pool with batch swaps on
-> @NEARProtocol.
->
-> Private transfers, swaps with sealed amounts that clear at one price per
-> epoch, and private claims, each a single Groth16 proof verified on-chain
-> with NEAR's BLS12-381 host functions (17 Tgas). Three circuits, a Rust
-> contract, a browser wallet that proves in a Web Worker, a sealer that runs
-> in a TEE. Live on testnet.
->
-> Repo + demo video below. #NEARHackathon
+The post says the project was built at NEAR HACKATHON, tags @NEARProtocol and
+#NEARHackathon, and carries the video. Attach both videos to the first post
+(X takes up to four media items): the animated presentation first, then the
+recorded wallet flow, so the post shows the idea and one complete user action
+from click to result. Each text below fits the 280-character limit.
 
-Attach the video. Optional tags: @NearLegion @NearBuilders. Submit the post
-link and the repository link in the form at nearhackathon.com; tracks:
-privacy, defi, open. The `website` field must stay empty.
+Post:
+
+> On a public chain, anyone can read your balance, your trades and who you trade with.
+> 
+> Antumbra is a shielded pool with batch swaps on @NEARProtocol: private transfers, sealed swap amounts, one price per epoch.
+> 
+> Built at NEAR HACKATHON. Demo below. #NEARHackathon
+
+Reply 1, what NEAR makes possible:
+
+> What NEAR makes possible: its native BLS12-381 host functions verify a Groth16 proof on chain for 17 Tgas, so every private action is one proof in one transaction.
+> 
+> A sealer built for a TEE opens each epoch's batch, and the net leg is priced on NEAR Intents (a dry run for now).
+
+Reply 2, where to try it and a question:
+
+> Try it on testnet. Proofs are built in your browser, about 3 s each:
+> https://valentine1898.github.io/antumbra/
+> 
+> Circuits, contract, wallet and tests:
+> https://github.com/Valentine1898/antumbra
+> 
+> Next: hiding which side you sell. What else should a private DEX hide?
+> @NearLegion @NearBuilders
+
+## Submission form (nearhackathon.com/#apply)
+
+One submission per project, before 14 November 2026 23:59 UTC, and it cannot
+be edited afterwards (mistakes go through nearhackathon.com/request-changes).
+Send it when the repository is public and the post is up.
+
+| Field | Value |
+|---|---|
+| Project name | Antumbra |
+| Team lead, email, team size | yours |
+| Tracks | Privacy & Private AI, Unstoppable DeFi, Open Innovation |
+| NEAR wallet address | your mainnet account for the prize (`name.near`), not a testnet one |
+| Repository link | https://github.com/Valentine1898/antumbra |
+| Demo post link | the link to the X post above |
+| Website | leave empty: it is a spam trap, any value rejects the submission |
+
+What did you build (20 to 2,000 characters):
+
+> Problem: on a public chain every balance, trade and counterparty is visible forever, and visible orders get front-run.
+> 
+> Antumbra is a shielded pool with batch swaps on NEAR. You deposit NEP-141 tokens into private notes, transfer them privately, and swap inside the pool. Swaps are collected per 20-block epoch and every amount is sealed: verifiably encrypted to a sealer inside the proof, so the chain stores only a commitment and a ciphertext. When the epoch ends the sealer publishes only the batch totals, the whole batch clears at one price, and each trader claims a share with a proof that does not reveal which swap was theirs.
+> 
+> What is built: three Groth16 circuits over BLS12-381 (join-split 17,376 constraints, sealed swap 24,330, swap claim 22,349); a Rust contract where every action is one proof in one call (81 to 92 Tgas); a browser wallet that proves in a Web Worker in about 3 seconds; a CLI wallet; a sealer that runs as a signed executor today and is wired to run in a TEE through OutLayer; sandbox end-to-end tests in which replayed claims, an impostor sealer, wrong totals and late swaps are rejected. Live on testnet with wNEAR and USDC.e.
+> 
+> How NEAR fits: the design rests on NEAR's native BLS12-381 host functions (NEP-488). A Groth16 verification costs 17 Tgas, so a full private action fits in one transaction. Each batch's net leg is priced on NEAR Intents through the 1Click API; today that is a dry run with live mainnet quotes, and settlement through the Intents contract is designed, not shipped. The trusted setup is a seeded development setup, documented as not production-safe.
+
+The hosted wallet should stay up through judging (16 to 18 November, ideally
+to the 25th), which means the pool's sealer has to keep running:
+`scripts/sealer.sh`.

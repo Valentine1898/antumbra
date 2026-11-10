@@ -28,6 +28,9 @@ python3 -m venv /tmp/tts && /tmp/tts/bin/pip install edge-tts && PATH=/tmp/tts/b
 python3 compose2.py /tmp/take /tmp/overlays /tmp/cards /tmp/voice /tmp/antumbra-product.mp4
 ```
 
+`deck/` holds a different kind of video: the animated presentation, with
+diagrams instead of a screen recording; see `deck/README.md`.
+
 `record.mjs` seeds the gas payer into localStorage so the video opens
 connected, draws a cursor (headless video has none), and writes
 `markers.json` with the time of every step; `compose.py` places the captions

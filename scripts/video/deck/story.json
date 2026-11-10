@@ -1,0 +1,111 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-2%",
+  "fps": 30,
+  "overlap": 0.3,
+  "gap": 0.55,
+  "scenes": [
+    {
+      "id": "problem",
+      "chapter": "The problem",
+      "lead": 2.6,
+      "tail": 1.1,
+      "lines": [
+        "On a public blockchain, every balance, every trade, and every counterparty is visible to everyone. Forever."
+      ]
+    },
+    {
+      "id": "title",
+      "chapter": "",
+      "lead": 2.6,
+      "tail": 1.5,
+      "min": 7.5,
+      "lines": [
+        "Antumbra is a shielded pool with batch swaps, built on NEAR."
+      ]
+    },
+    {
+      "id": "shield",
+      "chapter": "Shield",
+      "lead": 0.9,
+      "tail": 1.2,
+      "lines": [
+        "Shield your tokens, and they cross from the light into the shade.",
+        "The chain sees an amount and a commitment. Never who owns it."
+      ]
+    },
+    {
+      "id": "transfer",
+      "chapter": "Private transfers",
+      "lead": 0.9,
+      "tail": 1.2,
+      "lines": [
+        "Inside the shade, transfers are private.",
+        "The chain sees two nullifiers and two commitments, and nothing else."
+      ]
+    },
+    {
+      "id": "batch",
+      "chapter": "Sealed batch swaps",
+      "lead": 0.9,
+      "tail": 1.6,
+      "lines": [
+        "Swaps are batched by epoch, and every amount is sealed: encrypted inside the proof, so not even the chain learns it.",
+        "When the epoch ends, the sealer opens the batch and publishes only the totals.",
+        "Everyone trades at one clearing price, and claims their share privately."
+      ]
+    },
+    {
+      "id": "proofs",
+      "chapter": "Proofs",
+      "lead": 0.9,
+      "tail": 1.3,
+      "lines": [
+        "Every action is a single {Groth16|Groth sixteen} proof.",
+        "It is built in your browser in seconds, and verified on chain by NEAR's native {BLS12-381|B L S twelve, three eighty-one} host functions."
+      ]
+    },
+    {
+      "id": "intents",
+      "chapter": "NEAR Intents",
+      "lead": 0.9,
+      "tail": 1.3,
+      "lines": [
+        "Inside a batch, buyers and sellers net against each other.",
+        "Only the imbalance needs outside liquidity, and that leg is priced live on NEAR Intents."
+      ]
+    },
+    {
+      "id": "product",
+      "chapter": "The wallet",
+      "lead": 0.9,
+      "tail": 1.4,
+      "min": 15.6,
+      "lines": [
+        "And it runs today. A wallet that proves in the browser, live on NEAR testnet, with wrapped NEAR and {USDC|U S D C}.",
+        "Shield, swap, claim, and withdraw, and see exactly what the chain saw."
+      ]
+    },
+    {
+      "id": "facts",
+      "chapter": "What ships",
+      "lead": 0.9,
+      "tail": 1.3,
+      "lines": [
+        "Three circuits, a Rust contract, a browser wallet, a command line wallet, and a sealer built for a {TEE|trusted execution environment}.",
+        "Open source, and tested end to end."
+      ]
+    },
+    {
+      "id": "outro",
+      "chapter": "",
+      "lead": 1.3,
+      "tail": 2.6,
+      "min": 7.5,
+      "lines": [
+        "Antumbra. Private transfers, sealed swaps, one price per epoch."
+      ]
+    }
+  ],
+  "trim": 1.7
+}

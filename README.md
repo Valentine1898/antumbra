@@ -170,8 +170,11 @@ antumbra route quote --sell 1 --amount <base units>   # live NEAR Intents quote 
 antumbra route plan --pair 1 --epoch <cleared epoch>  # how that batch would have cleared through NEAR Intents
 ```
 
-`antumbra sealer watch --pair 1` keeps clearing epochs as they end; `deploy`
-generates the sealer keys and registers them. `deploy --token wrap.testnet
+`antumbra sealer watch --pair 1` keeps clearing epochs as they end
+(`scripts/sealer.sh` runs it for the deployment in the repository root);
+`deploy` generates the sealer keys, registers them and writes them to
+`deployment.secret.json`, which is ignored by git and must be kept: without
+it nobody can clear that pool's swaps. `deploy --token wrap.testnet
 --token usdc.fakes.testnet --liquidity <wNEAR base units> --liquidity <USDC.e
 base units>` registers existing NEP-141 tokens instead of deploying test ones
 (the deployer must hold the liquidity: `antumbra wrap --amount <yocto>` wraps
@@ -288,6 +291,27 @@ of fixed call cost. Reproduce with the three `spike` steps:
 Pure-wasm verification over BLS12-377 fits under the 300 Tgas call limit but
 leaves room for only one proof per transaction, which rules out designs with
 several proofs per transaction.
+
+## Built with
+
+Everything in this repository was written during the hackathon window (first
+commit 5 November 2026); there is no earlier codebase behind it. The code was
+written with an AI coding assistant (Claude Code), as the commit trailers
+show. Libraries it stands on:
+
+- [arkworks](https://arkworks.rs) 0.6: `ark-groth16`, `ark-relations`,
+  `ark-r1cs-std`, `ark-crypto-primitives` (Poseidon sponge), `ark-bls12-381`,
+  `ark-ed-on-bls12-381` (Jubjub)
+- [near-sdk](https://github.com/near/near-sdk-rs) 5.30 and
+  near-contract-standards; near-workspaces 0.24 for the sandbox tests and the
+  CLI's chain client
+- x25519-dalek, chacha20poly1305, ed25519-dalek and sha2 for note encryption
+  and executor signatures
+- wasm-bindgen and wasm-pack for the browser prover; Vite, TypeScript,
+  near-api-js and NEAR Wallet Selector for the web wallet
+- The NEAR Intents 1Click API for quotes, and OutLayer's interface for the
+  TEE path
+- Playwright, ffmpeg, numpy, scipy and edge-tts for the scripted videos
 
 ## License
 
