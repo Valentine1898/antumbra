@@ -65,13 +65,32 @@ $ANT --wallet "$A" sync
 $ANT --wallet "$A" swap --pair "$PAIR" --sell 1 --amount "$(amt 100000)"
 
 step "waiting for the epoch to end and the sealer to clear it, then claiming"
-for i in $(seq 1 40); do
-  # With the sealer's secrets in the secret file (any deployment made by `deploy`)
-  # this clears the epoch itself; otherwise the pool's own sealer daemon does.
+# With the sealer's secrets in the secret file (any deployment made by `deploy`)
+# this clears the epoch itself. Otherwise the pool's own sealer does: within
+# seconds while its operator runs scripts/sealer.sh, within minutes when only
+# the scheduled workflow is clearing the hosted pool. SEALER_WAIT (seconds,
+# default 1800) is how long to wait for it.
+SEALER_WAIT="${SEALER_WAIT:-1800}"
+DEADLINE=$(( $(date +%s) + SEALER_WAIT ))
+SEEN=""
+while :; do
   $ANT sealer clear --pair "$PAIR" >/dev/null 2>&1 || true
   OUT=$($ANT --wallet "$A" claim 2>&1 || true)
-  echo "$OUT" | tail -3
-  if echo "$OUT" | grep -q "claimed:"; then break; fi
+  if echo "$OUT" | grep -q "claimed:"; then echo "$OUT" | tail -3; break; fi
+  STATE=$(echo "$OUT" | grep -m1 "swap #" || echo "$OUT" | tail -1)
+  case "$STATE" in
+    *"not cleared"*)
+      if [ "$SEEN" != cleared ]; then
+        echo "$STATE"
+        echo "waiting for the pool's sealer (up to $((SEALER_WAIT / 60)) min; the hosted pool is cleared on a schedule, every few minutes)"
+        SEEN=cleared
+      fi ;;
+    *) echo "$STATE" ;;
+  esac
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "the sealer has not cleared the epoch in $SEALER_WAIT s; once it has, run: $ANT --wallet $A claim" >&2
+    exit 1
+  fi
   sleep 5
 done
 $ANT --wallet "$A" sync

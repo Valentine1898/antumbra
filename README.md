@@ -150,7 +150,9 @@ Build the CLI and run the demo:
    `ANTUMBRA_KEY`. The script wraps 0.7 NEAR of that account into wNEAR,
    creates two wallets, deposits, transfers privately, withdraws, swaps,
    waits for the epoch and the sealer, claims and withdraws the bought USDC.e,
-   printing gas and the pool state at each step. On a deployment with test
+   printing gas and the pool state at each step. The wait for the sealer is
+   the only slow part: seconds while the pool's operator runs a sealer, up to
+   several minutes when only the scheduled workflow is clearing the pool. On a deployment with test
    tokens it mints them instead (`antumbra mint` is open to anyone).
 
 Or deploy your own copy and run against it:
