@@ -1,0 +1,56 @@
+name: Sealer
+
+# Clears the finished epochs of the testnet pool in deployment.json, so swaps
+# made in the hosted wallet can be claimed even when nobody is running
+# scripts/sealer.sh. GitHub starts scheduled runs every five minutes at best
+# and often later; a sealer running locally clears an epoch within seconds,
+# and the two do not conflict. The sealer's keys are the repository secret
+# ANTUMBRA_SEALER_SECRET (the contents of deployment.secret.json).
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sealer
+  cancel-in-progress: false
+
+jobs:
+  clear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore the CLI
+        id: cli
+        uses: actions/cache/restore@v4
+        with:
+          path: sealer-bin
+          key: antumbra-cli-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/**') }}
+      - name: Build the CLI (only when its sources changed)
+        if: steps.cli.outputs.cache-hit != 'true'
+        run: |
+          cargo build -p antumbra-cli --release
+          mkdir -p sealer-bin && cp target/release/antumbra sealer-bin/
+      - name: Keep the CLI for the next runs
+        if: steps.cli.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sealer-bin
+          key: ${{ steps.cli.outputs.cache-primary-key }}
+      - name: Clear finished epochs
+        env:
+          SEALER_SECRET: ${{ secrets.ANTUMBRA_SEALER_SECRET }}
+        run: |
+          if [ -z "$SEALER_SECRET" ]; then echo "::error::the ANTUMBRA_SEALER_SECRET repository secret is not set"; exit 1; fi
+          printf '%s' "$SEALER_SECRET" > deployment.secret.json
+          pair=$(jq -r .pair_id deployment.json)
+          for rpc in https://test.rpc.fastnear.com https://rpc.testnet.near.org https://test.rpc.fastnear.com; do
+            if sealer-bin/antumbra --network testnet --rpc "$rpc" sealer clear --pair "$pair" --lookback 120; then exit 0; fi
+            echo "clearing through $rpc failed; trying the next endpoint"
+            sleep 15
+          done
+          exit 1

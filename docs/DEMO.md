@@ -116,5 +116,7 @@ What did you build (20 to 2,000 characters):
 > How NEAR fits: the design rests on NEAR's native BLS12-381 host functions (NEP-488). A Groth16 verification costs 17 Tgas, so a full private action fits in one transaction. Each batch's net leg is priced on NEAR Intents through the 1Click API; today that is a dry run with live mainnet quotes, and settlement through the Intents contract is designed, not shipped. The trusted setup is a seeded development setup, documented as not production-safe.
 
 The hosted wallet should stay up through judging (16 to 18 November, ideally
-to the 25th), which means the pool's sealer has to keep running:
-`scripts/sealer.sh`.
+to the 25th), which means the pool's sealer has to keep running. A scheduled
+workflow (`.github/workflows/sealer.yml`) clears finished epochs every few
+minutes; `scripts/sealer.sh` on your own machine clears them within seconds,
+which is what you want while recording or presenting.

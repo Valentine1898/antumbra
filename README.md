@@ -174,7 +174,10 @@ antumbra route plan --pair 1 --epoch <cleared epoch>  # how that batch would hav
 (`scripts/sealer.sh` runs it for the deployment in the repository root);
 `deploy` generates the sealer keys, registers them and writes them to
 `deployment.secret.json`, which is ignored by git and must be kept: without
-it nobody can clear that pool's swaps. `deploy --token wrap.testnet
+it nobody can clear that pool's swaps. The pool behind the hosted wallet is
+also cleared by a scheduled workflow (`.github/workflows/sealer.yml`, every
+few minutes, keys in a repository secret), so a swap made there can always
+be claimed, a little later than with a sealer running next to it. `deploy --token wrap.testnet
 --token usdc.fakes.testnet --liquidity <wNEAR base units> --liquidity <USDC.e
 base units>` registers existing NEP-141 tokens instead of deploying test ones
 (the deployer must hold the liquidity: `antumbra wrap --amount <yocto>` wraps
