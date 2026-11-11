@@ -59,12 +59,18 @@ over two minutes long.
 ## X post (required by the submission form)
 
 The post says the project was built at NEAR HACKATHON, tags @NEARProtocol and
-#NEARHackathon, and carries the video. Attach both videos to the first post
-(X takes up to four media items): the animated presentation first, then the
-recorded wallet flow, so the post shows the idea and one complete user action
-from click to result. Each text below fits the 280-character limit.
+#NEARHackathon, and carries a video. One video per post: media items in one
+post share its width, and the submission form links to the first post, so
+that post shows one thing. The animated presentation (`scripts/video/deck/`)
+goes on the post. The recorded wallet flow (`scripts/video/`) goes on the
+first reply, right under it and next to the link where anyone can repeat it.
+Both files are within X's limits for a free account (140 seconds, 512 MB),
+and each text below fits the 280-character limit. Locally the files are
+`docs/demo/antumbra-presentation.mp4` (captions burned in, so it reads
+without sound) and `docs/demo/antumbra-product.mp4`; that folder is ignored
+by git.
 
-Post:
+Post, with the presentation:
 
 > On a public chain, anyone can read your balance, your trades and who you trade with.
 > 
@@ -72,15 +78,9 @@ Post:
 > 
 > Built at NEAR HACKATHON. Demo below. #NEARHackathon
 
-Reply 1, what NEAR makes possible:
+Reply 1, with the wallet recording: where to try it and a question:
 
-> What NEAR makes possible: its native BLS12-381 host functions verify a Groth16 proof on chain for 17 Tgas, so every private action is one proof in one transaction.
-> 
-> A sealer built for a TEE opens each epoch's batch, and the net leg is priced on NEAR Intents (a dry run for now).
-
-Reply 2, where to try it and a question:
-
-> Try it on testnet. Proofs are built in your browser, about 3 s each:
+> The wallet, start to finish. Try it on testnet, a proof takes about 3 s in your browser:
 > https://valentine1898.github.io/antumbra/
 > 
 > Circuits, contract, wallet and tests:
@@ -88,6 +88,12 @@ Reply 2, where to try it and a question:
 > 
 > Next: hiding which side you sell. What else should a private DEX hide?
 > @NearLegion @NearBuilders
+
+Reply 2, text only: what NEAR makes possible:
+
+> What NEAR makes possible: its native BLS12-381 host functions verify a Groth16 proof on chain for 17 Tgas, so every private action is one proof in one transaction.
+> 
+> A sealer built for a TEE opens each epoch's batch, and the net leg is priced on NEAR Intents (a dry run for now).
 
 ## Submission form (nearhackathon.com/#apply)
 
@@ -116,7 +122,10 @@ What did you build (20 to 2,000 characters):
 > How NEAR fits: the design rests on NEAR's native BLS12-381 host functions (NEP-488). A Groth16 verification costs 17 Tgas, so a full private action fits in one transaction. Each batch's net leg is priced on NEAR Intents through the 1Click API; today that is a dry run with live mainnet quotes, and settlement through the Intents contract is designed, not shipped. The trusted setup is a seeded development setup, documented as not production-safe.
 
 The hosted wallet should stay up through judging (16 to 18 November, ideally
-to the 25th), which means the pool's sealer has to keep running. A scheduled
-workflow (`.github/workflows/sealer.yml`) clears finished epochs every few
-minutes; `scripts/sealer.sh` on your own machine clears them within seconds,
-which is what you want while recording or presenting.
+to the 25th), which means the pool's sealer has to keep running. A workflow
+(`.github/workflows/sealer.yml`) clears finished epochs every few minutes and
+starts its own next run; `scripts/sealer.sh` on your own machine clears them
+within seconds, which is what you want while recording or presenting. If the
+workflow's chain of runs ever stops, a watchdog workflow
+(`sealer-watchdog.yml`) starts it again within a quarter of an hour; if both
+stop, `gh workflow run sealer.yml` starts both.
