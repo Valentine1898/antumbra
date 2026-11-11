@@ -98,10 +98,10 @@ Reply 2, text only: what NEAR makes possible:
 Reply 3, text only, for after the TEE run of 11 November (the second pool,
 `deployment-tee.json`):
 
-> Update: the sealer now runs inside a TEE on testnet. Its key was generated in an Intel TDX enclave on OutLayer, and no person holds it. Anyone can call end_epoch: the enclave opens the batch and returns only the totals.
+> Update: the sealer now runs inside a TEE on testnet. Its key was generated in an Intel TDX enclave on OutLayer; no person holds it. Anyone can call end_epoch: the enclave opens the batch and returns only the totals.
 > 
-> One clearing, on chain:
-> https://testnet.nearblocks.io/txns/CWXkTKeaNeLugtdFATkVt4bpaRZZBEMtkqBnG8zoMUr8
+> Try it, the wallet calls it for you:
+> https://valentine1898.github.io/antumbra/?pool=tee
 
 ## Submission form (nearhackathon.com/#apply)
 
