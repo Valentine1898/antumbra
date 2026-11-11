@@ -1,0 +1,129 @@
+name: Sealer watchdog
+
+# Keeps the sealer's chain of runs going. The sealer workflow (sealer.yml)
+# starts its own next run, so one run lost during a GitHub incident would end
+# it for good. A run of this workflow waits out the timer of the
+# `sealer-watchdog` environment (ten minutes; a waiting job occupies no
+# runner), starts the next watch, and starts a sealer run if none from the
+# last half hour is still queued, running or waiting.
+#
+# The two workflows look after each other: every sealer run starts a watchdog
+# unless one is already there. Each starts a run of the other only after
+# GitHub's list of runs has shown the run it has just started for itself. A
+# list that is behind hides runs that exist, and starting more on its word
+# would multiply them. Both chains stop only if GitHub loses a run of each
+# within the same ten minutes; `gh workflow run sealer.yml` starts both again.
+#
+# To stop both, disable the sealer workflow: its chain ends, the watchdog sees
+# that and ends its own. The environment is repository configuration, made
+# once:
+#   gh api -X PUT repos/OWNER/REPO/environments/sealer-watchdog -F wait_timer=10
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    environment:
+      name: sealer-watchdog
+      deployment: false
+    steps:
+      - name: Start the next watch, and the sealer if its chain stopped
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/$GITHUB_REPOSITORY/actions/workflows"
+          # An outage must not end the watch at once: keep asking GitHub for ten minutes.
+          deadline=$(( $(date +%s) + 600 ))
+
+          # Asks GitHub until it answers. When GitHub answers with an error,
+          # `gh api` prints the error itself, so an answer is passed on only if
+          # the call succeeded.
+          ask() {
+            local out
+            while :; do
+              if out=$(gh api "$@"); then printf '%s\n' "$out"; return 0; fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then return 1; fi
+              sleep 30
+            done
+          }
+
+          # The number of a run of a workflow that is queued, running or waiting
+          # on its timer and is later than the given run number. A run that
+          # started over half an hour ago is stuck and does not count.
+          going() {
+            ask "$api/$1/runs?per_page=10" --jq "[.workflow_runs[] | select(.status != \"completed\" and .run_number > $2 and (now - (.created_at | fromdateiso8601)) < 1800) | .run_number] | max // empty"
+          }
+
+          # Asks GitHub to start a run of a workflow, again if it answers with
+          # an error.
+          start() {
+            until gh api -X POST "$api/$1/dispatches" -f ref="$GITHUB_REF_NAME"; do
+              echo; echo "GitHub refused to start $1"
+              if [ "$(date +%s)" -ge "$deadline" ]; then return 1; fi
+              sleep 30
+            done
+          }
+
+          # Waits up to two minutes for such a run to show up in GitHub's list.
+          shows_up() {
+            local run
+            for look in $(seq 1 24); do
+              sleep 5
+              run=$(going "$1" "$2") || return 1
+              if [ -n "$run" ]; then echo "$run"; return 0; fi
+            done
+            return 1
+          }
+
+          state=$(ask "$api/sealer.yml" --jq .state)
+          case "$state" in
+            disabled_*)
+              echo "the sealer workflow is $state, so there is nothing to watch; its next run starts a watchdog again"
+              exit 0 ;;
+          esac
+          state=$(ask "$api/sealer-watchdog.yml" --jq .state)
+          case "$state" in
+            disabled_*) echo "this workflow is $state: the watch ends here"; exit 0 ;;
+          esac
+
+          # Only the latest watch carries on, so two that were started at once
+          # become one chain again.
+          later=$(going sealer-watchdog.yml "$GITHUB_RUN_NUMBER")
+          if [ -n "$later" ]; then
+            echo "watch #$later is later and carries on from here"
+            exit 0
+          fi
+
+          start sealer-watchdog.yml
+          if ! next=$(shows_up sealer-watchdog.yml "$GITHUB_RUN_NUMBER"); then
+            echo "::error::the next watch has not shown up: GitHub lost it, or its list of runs is behind. The sealer is left alone; a sealer run starts a watchdog again."
+            exit 1
+          fi
+          echo "the next watch is run #$next"
+
+          # GitHub's list has just shown a run that is seconds old, so it can be
+          # trusted about the sealer too.
+          run=$(going sealer.yml 0)
+          if [ -z "$run" ]; then
+            # One more look, in case this fell between two sealer runs.
+            sleep 60
+            run=$(going sealer.yml 0)
+          fi
+          if [ -n "$run" ]; then
+            echo "the sealer is going: run #$run"
+            exit 0
+          fi
+          echo "::warning::the sealer's chain of runs had stopped; starting it again"
+          start sealer.yml
+          if run=$(shows_up sealer.yml 0); then
+            echo "the sealer is going again: run #$run"
+          else
+            echo "::error::the sealer run has not shown up; the next watch looks again"
+            exit 1
+          fi

@@ -5,20 +5,22 @@ name: Sealer
 # scripts/sealer.sh. A sealer running locally clears an epoch within seconds;
 # this one gets to it within a few minutes, and the two do not conflict.
 #
-# The workflow keeps itself going. GitHub's scheduler did not start a single
-# run of it in its first six hours, so each run ends by starting the next:
-# the `next` job waits out the timer of the `sealer-pause` environment (four
+# The workflow keeps itself going. GitHub's scheduler started only two runs of
+# it in its first twenty hours, so each run ends by starting the next: the
+# `next` job waits out the timer of the `sealer-pause` environment (four
 # minutes; a waiting job occupies no runner) and dispatches the workflow
-# again. A run lost during a GitHub incident ends the chain; the schedule
-# below restarts it if GitHub honours it, and so does starting a run by hand.
+# again. A run lost during a GitHub incident would end that chain, so a second
+# workflow, sealer-watchdog.yml, starts it again within a quarter of an hour;
+# each run here starts that watchdog unless one is already waiting. The
+# schedule below is kept as one more way back in.
 # To start the chain by hand: gh workflow run sealer.yml
-# To stop it: disable the workflow, or cancel the run that is waiting.
+# To stop it: disable this workflow. The watchdog then ends its own chain.
 #
 # Each run scans back to the start of the last run that succeeded, so however
 # late a run is, no epoch is skipped. The sealer's keys are the repository
 # secret ANTUMBRA_SEALER_SECRET: the contents of deployment.secret.json (the
 # pool account's own key is not used and can be left empty). The environment
-# is repository configuration, made once:
+# is repository configuration, made once (the watchdog has one of its own):
 #   gh api -X PUT repos/OWNER/REPO/environments/sealer-pause -F wait_timer=4
 on:
   schedule:
@@ -109,8 +111,8 @@ jobs:
 
   next:
     # Starts the next run once the environment's wait timer has passed. Only
-    # the newest run does, so runs started by hand or by the schedule join the
-    # one chain instead of starting more.
+    # the latest run does, so runs started by hand, by the schedule or by the
+    # watchdog join the one chain instead of starting more.
     needs: clear
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -125,18 +127,64 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/sealer.yml/runs?per_page=1" --jq '.workflow_runs[0].id // empty' || true)
-          if [ -n "$newest" ] && [ "$newest" != "$GITHUB_RUN_ID" ]; then
-            echo "run $newest is newer and carries on from here"
+          api="repos/$GITHUB_REPOSITORY/actions/workflows"
+
+          # The number of a run of a workflow that is queued, running or waiting
+          # on its timer and is later than the given run number. A run that
+          # started over half an hour ago is stuck and does not count. When
+          # GitHub answers with an error, `gh api` prints the error itself, so
+          # an answer is dropped unless the call succeeded: a question left
+          # unanswered must not end the chain.
+          going() {
+            gh api "$api/$1/runs?per_page=10" --jq "[.workflow_runs[] | select(.status != \"completed\" and .run_number > $2 and (now - (.created_at | fromdateiso8601)) < 1800) | .run_number] | max // empty"
+          }
+
+          # Disabling this workflow is how its chain is stopped.
+          state=$(gh api "$api/sealer.yml" --jq .state) || state=
+          case "$state" in
+            disabled_*) echo "this workflow is $state: the chain ends here"; exit 0 ;;
+          esac
+
+          later=$(going sealer.yml "$GITHUB_RUN_NUMBER") || later=
+          if [ -n "$later" ]; then
+            echo "run #$later is later and carries on from here"
             exit 0
           fi
-          # Keep trying for six minutes: a failed call here would end the chain.
+
+          # Keep trying for six minutes: a failed call here would end the chain
+          # until the watchdog's next look.
+          started=
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/sealer.yml/dispatches" -f ref="$GITHUB_REF_NAME"; then
-              echo "started the next run"
-              exit 0
-            fi
+            if gh api -X POST "$api/sealer.yml/dispatches" -f ref="$GITHUB_REF_NAME"; then started=yes; break; fi
             sleep 30
           done
-          echo "::error::could not start the next run; start the chain again with: gh workflow run sealer.yml"
-          exit 1
+          if [ -z "$started" ]; then
+            echo "::error::could not start the next run; the watchdog starts the chain again, and so does: gh workflow run sealer.yml"
+            exit 1
+          fi
+          echo "started the next run"
+
+          # The watchdog (sealer-watchdog.yml) starts this workflow again if
+          # its chain ever stops, and this is what starts the watchdog again.
+          # It looks for a watchdog only once GitHub's list shows the run
+          # started above: a list that is behind would hide a watchdog that is
+          # already waiting, and one more would be started on every run.
+          next=
+          for look in $(seq 1 24); do
+            sleep 5
+            next=$(going sealer.yml "$GITHUB_RUN_NUMBER") || next=
+            if [ -n "$next" ]; then break; fi
+          done
+          if [ -z "$next" ]; then
+            echo "::warning::the next run has not shown up in GitHub's list after two minutes; if it was lost, the watchdog starts the chain again"
+            exit 0
+          fi
+          echo "the next run is #$next"
+          watchdog=$(gh api "$api/sealer-watchdog.yml" --jq .state) || watchdog=
+          if [ "$watchdog" = active ] && watching=$(going sealer-watchdog.yml 0) && [ -z "$watching" ]; then
+            if gh api -X POST "$api/sealer-watchdog.yml/dispatches" -f ref="$GITHUB_REF_NAME"; then
+              echo "started a watchdog"
+            else
+              echo "::warning::could not start a watchdog; the next run tries again"
+            fi
+          fi

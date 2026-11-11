@@ -179,8 +179,9 @@ antumbra route plan --pair 1 --epoch <cleared epoch>  # how that batch would hav
 it nobody can clear that pool's swaps. The pool behind the hosted wallet is
 also cleared by a workflow (`.github/workflows/sealer.yml`, keys in a
 repository secret) that runs every few minutes and starts its own next run,
-so a swap made there can always be claimed, a little later than with a
-sealer running next to it. `deploy --token wrap.testnet
+with a second workflow (`sealer-watchdog.yml`) that starts it again if that
+chain of runs ever stops, so a swap made there can always be claimed, a
+little later than with a sealer running next to it. `deploy --token wrap.testnet
 --token usdc.fakes.testnet --liquidity <wNEAR base units> --liquidity <USDC.e
 base units>` registers existing NEP-141 tokens instead of deploying test ones
 (the deployer must hold the liquidity: `antumbra wrap --amount <yocto>` wraps
