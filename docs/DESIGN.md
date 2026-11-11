@@ -4,8 +4,9 @@ Shielded batch swaps on NEAR, implemented as one smart contract and
 three Groth16 circuits over BLS12-381, verified on-chain through the NEP-488
 host functions (17 Tgas per proof). The swap input is burned from a shielded
 pool, so it is unlinkable to any account; every swap of an epoch clears at
-one price; the swap output is minted privately. Sealed swap amounts are out
-of scope for the core and listed as a stretch goal.
+one price; the swap output is minted privately. Swap amounts are sealed: the
+chain stores a commitment and a ciphertext that only the pool's sealer can
+open, and the sealer publishes nothing but each batch's totals.
 
 Poseidon over BLS12-381 Fr (width 3, 8 full + 57 partial rounds, x^5) is the
 only hash; its parameters and the empty-subtree roots are generated once by
@@ -26,8 +27,13 @@ wasm runtime and as R1CS gadgets, with tests pinning them to each other.
 - **Pairs.** `(asset_1, asset_2, reserve_1, reserve_2)`, a constant-product
   pool with a 0.3% fee. Liquidity is public (`ft_transfer_call` with
   `{"liquidity_pair": id}`); LP privacy is out of scope.
-- **Batches.** Per `(epoch, pair)`: accumulated `delta_1`, `delta_2` and,
-  once executed, the `BatchSwapOutputData` and its hash.
+- **Batches.** Per `(epoch, pair)`: the sealed entries `(direction,
+  delta_cm, EPK, ct)` in the order they arrived and, once the sealer has
+  cleared the batch, the totals `delta_1`, `delta_2`, the
+  `BatchSwapOutputData` and its hash.
+- **Sealer.** The sealer's encryption key (a Jubjub point), the ed25519 key
+  of the signed executor and, optionally, the OutLayer program that runs the
+  sealer inside a TEE.
 
 Amounts are u128 but limited to 112 bits everywhere (circuits range-check
 them), so a product of two amounts stays below the field modulus.
@@ -78,7 +84,9 @@ output commitments; `amount_in_1 + amount_in_2 + public_amount = amount_out_1
 
 ### Swap
 
-Public inputs: `root, asset_id, nf_1, nf_2, cm_change, scm, epoch, pair_id, direction, delta`.
+Public inputs: `root, asset_id, nf_1, nf_2, cm_change, scm, epoch, pair_id,
+direction, delta_cm, EPK.x, EPK.y, ct_0, ct_1, PK.x, PK.y`. The amount
+`delta` is a private witness.
 
 ```
 swap record  (epoch, pair_id, direction, delta, claim_pk, rseed)
@@ -87,21 +95,29 @@ scm        = H(DOM_SWAP, epoch, pair_id, direction, delta, claim_pk, rseed)
 
 Two inputs of `asset_id` are spent exactly as in JoinSplit, one change note
 is created, `amount_in_1 + amount_in_2 = change + delta`, `direction ∈ {1,
-2}`, `delta > 0`, and `scm` opens to the public `(epoch, pair_id, direction,
-delta)` with a witness `claim_pk, rseed`. The contract checks that
-`asset_id` is the sold side of the pair, that `epoch` is at most the
-current one and its batch has not been executed, records the nullifiers,
-inserts `cm_change` then `scm`, and adds `delta` to the batch. The burned
-amount is public but unlinkable to the sender.
+2}`, `delta > 0`, and `scm` opens to the public `(epoch, pair_id, direction)`
+and the private `delta` with a witness `claim_pk, rseed`. The same proof
+shows that `delta_cm` commits to `delta` and that `(EPK, ct)` encrypts it to
+the sealer's key `PK` (see [Sealed amounts](#sealed-amounts)). The contract
+checks that `asset_id` is the sold side of the pair and that `epoch` is at
+most the current one and its batch has not been cleared, verifies the proof
+with the registered sealer key as `PK` (a ciphertext made for any other key
+fails), records the nullifiers, inserts `cm_change` then `scm`, and appends
+`(direction, delta_cm, EPK, ct)` to the batch. The sold side is public; the
+amount is hidden and unlinkable to the sender.
 
-### Epoch execution (public, permissionless)
+### Epoch clearing
 
 Epoch = `block_height / EPOCH_BLOCKS` (20 blocks). Once an epoch has ended,
-`end_epoch(epoch, pair)` executes its batch; `swap_claim` does the same on
-demand if nobody has. Direction 1 (`delta_1`, asset_1 -> asset_2) executes
-first, then direction 2 against the updated reserves, each as one
-constant-product trade with the fee. An input that produces no output
-(empty pool, or rounding) is returned as `unfilled`.
+the sealer opens the entries of its batch and delivers the per-direction
+totals `delta_1`, `delta_2`, either signed by the registered executor
+(`end_epoch_signed`) or returned from a TEE (`end_epoch`); both are described
+under [Sealed amounts](#sealed-amounts). The contract then executes the
+totals against the pool: direction 1 (`delta_1`, asset_1 -> asset_2) first,
+then direction 2 against the updated reserves, each as one constant-product
+trade with the fee. An input that produces no output (empty pool, or
+rounding) is returned as `unfilled`. A claim is rejected until its batch has
+been cleared.
 
 ```
 BatchSwapOutputData {
@@ -137,10 +153,11 @@ notes.
 | Call | Proof | Tgas |
 | --- | --- | --- |
 | deposit (`ft_transfer_call` round trip) | no | 38 total |
-| joinsplit transfer | 1 | 83 |
+| joinsplit transfer | 1 | 84 |
 | joinsplit withdrawal | 1 | 88 total with `ft_transfer` |
-| swap | 1 | 86 |
-| end_epoch | no | 11 |
+| swap (sealed amount, 16 public inputs) | 1 | 92 |
+| end_epoch_signed | no | 12 |
+| end_epoch through OutLayer (testnet, with its callbacks) | no | 23 |
 | swap_claim | 1 | 81 |
 
 Groth16 verification costs 17 Tgas; a Poseidon permutation in wasm about
@@ -152,7 +169,7 @@ goes. The 300 Tgas limit per call is why there is one proof per action.
 | Circuit | Public inputs | Constraints |
 | --- | --- | --- |
 | joinsplit | 8 | 17 376 |
-| swap | 10 | 17 625 |
+| swap | 16 | 24 330 |
 | swapclaim | 5 | 22 349 |
 
 Setups are seeded (development only, public toxic waste); verifying keys are
@@ -165,8 +182,10 @@ swaps, a cache of every leaf commitment for Merkle paths) in one JSON file,
 scans the chain by trial decryption, regenerates proving keys from the seeded
 setups (cached on disk) and submits actions through near-workspaces. The
 `antumbra` CLI exposes it: `keys-new`, `address`, `sync`, `balance`, `info`,
-`deposit`, `transfer`, `withdraw`, `swap`, `end-epoch`, `claim`, plus
-`deploy`, `mint` and `add-liquidity` for demos. The NEAR account that signs
+`deposit`, `transfer`, `withdraw`, `swap`, `claim`, `sealer` (register the
+keys, clear epochs once or keep clearing them) and `route` (NEAR Intents
+quotes), plus `deploy`, `wrap`, `mint` and `add-liquidity` for setting a pool
+up. The NEAR account that signs
 is visible on-chain as the gas payer; a relayer or a dedicated account breaks
 that link.
 
@@ -185,7 +204,8 @@ commitment   delta_cm = H(DOM_DELTA, delta, r)
 
 Jubjub's base field is BLS12-381's scalar field, so the two scalar
 multiplications, the Poseidon pad and the commitment are all native in the
-circuit (about 6 000 extra constraints). Public inputs of the sealed swap:
+circuit (the encryption gadget is 6 448 of the swap circuit's 24 330
+constraints). Public inputs of the sealed swap:
 `root, asset_id, nf_1, nf_2, cm_change, scm, epoch, pair_id, direction,
 delta_cm, EPK.x, EPK.y, ct_0, ct_1, PK.x, PK.y`. The contract checks `PK` is
 the registered sealer key, stores `(direction, delta_cm, EPK, ct)` in the
@@ -202,18 +222,29 @@ entries in order. Two ways to deliver the result:
   results from workers attested inside Intel TDX, and the contract's callback
   checks `entries_hash` before executing the batch. The sealer's secret is a
   `PROTECTED_` secret that is generated inside the TEE and injected only into
-  that program.
+  that program. The secret's row on OutLayer is bound to the program's hash
+  and opens only for requests whose calling account is the pool
+  (`Predecessor{Whitelist[pool]}`), whoever signed the transaction: anyone may
+  trigger the clearing, nobody may hand the enclave an entry of their choice.
+  The request states its resource limits (20 billion instructions, 128 MB,
+  60 s); OutLayer's workers skip a request that leaves them empty. This path
+  runs on testnet for the pool in `deployment-tee.json`: about 23 Tgas for
+  the whole call, 30 million instructions inside the enclave for one entry.
+  While the pool account keeps a full-access key, its holder can still make
+  such a request in the pool's name; a pool meant to exclude its operator
+  deletes that key.
 - **Signed executor.** `end_epoch_signed(epoch, pair, delta_1, delta_2,
   signature)` with an ed25519 signature by the registered executor key over
   `sha256("antumbra-sealed-totals-v1" || pool || epoch || pair || entries_hash
   || delta_1 || delta_2)`. Same program, run by the pool operator (or inside
   any other TEE); the trust root is the registered key. Used by the tests and
-  the local demo.
+  by the pool on testnet.
 
-Either way the batch then executes exactly as before and the claim circuit is
-unchanged: the claimer already knows their own `delta`. What stays public per
-swap: the sold side (`asset_id` and `direction`), the nullifiers and the
-commitments. What became private: the amount.
+Either way the batch then executes as described under [Epoch
+clearing](#epoch-clearing), and the claim circuit needs nothing from the
+sealer: the claimer already knows their own `delta`. Public per swap: the
+sold side (`asset_id` and `direction`), the nullifiers and the commitments.
+Private: the amount.
 
 ## Routing a batch through NEAR Intents
 

@@ -1,8 +1,11 @@
 # Antumbra
 
-A shielded pool with batch swaps on NEAR: inputs are burned from a shielded
-pool (unlinkable to the sender), every swap in an epoch clears at one price,
-outputs are minted privately. Groth16 over
+On a public chain every balance, trade and counterparty is visible forever,
+and a visible order can be front-run. Antumbra is a shielded pool with batch
+swaps on NEAR: tokens are deposited into private notes, transferred privately
+and swapped inside the pool. A swap's input is burned from the pool
+(unlinkable to the sender) with its amount sealed, every swap in an epoch
+clears at one price, and outputs are minted privately. Groth16 over
 BLS12-381, verified on-chain through NEAR's NEP-488 host functions.
 
 Built for the [NEAR HACKATHON](https://nearhackathon.com/) (1–14 November 2026).
@@ -20,6 +23,8 @@ Tracks: `privacy`, `defi`, `open`.
 | 6 | Browser wallet (`web/`): proving in WebAssembly inside a Web Worker (about 3 s per proof), notes scanned and kept in the browser, signing through a NEAR wallet or a throwaway funded testnet account created in-page |
 | 7 | Sealed amounts: the swap circuit proves a verifiable encryption of the amount to the sealer's key, the chain stores only a commitment and a ciphertext, and a sealer (signed executor, or the same program inside OutLayer's TEE) clears each epoch with batch totals |
 | 8 | Real tokens and a wallet UI in two pages: the pool on testnet trades wNEAR and USDC.e; a ledger shows every token's lit part (what NEAR sees) and shaded part (what only you see), the Threshold page moves value across, the Swap page trades inside the shade. Batches priced on NEAR Intents (1Click) as a dry run with live mainnet quotes |
+| 9 | Hosting: the pool behind the hosted wallet is cleared by a workflow that starts its own next run, with a second one that restarts it; a presentation film and a recorded wallet flow |
+| 10 | Clearing inside a TEE, run on testnet: a second pool whose sealer key exists only inside OutLayer's enclave (see [below](#clearing-inside-a-tee)) |
 
 Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -38,6 +43,7 @@ Protocol details: [docs/DESIGN.md](docs/DESIGN.md).
 | `web` | The browser wallet (Vite + TypeScript, near-api-js, wallet-selector) |
 | `tests/e2e` | Sandbox tests: the transfer cycle (deposit, private transfer, scan, withdraw, two rejected attacks) and the swap cycle (liquidity, swap, epoch execution, claim, withdrawal of the bought asset) |
 | `scripts/demo.sh` | Runs the whole flow through the CLI against a deployment |
+| `scripts/outlayer.mjs` | Moves a pool's sealer into OutLayer's TEE: publishes the program, has the secret generated in the enclave, registers the key, clears epochs |
 | `keys` | Embedded verifying keys (regenerable, byte-for-byte) |
 | `spike` | Day-1 gas measurements of five verification paths |
 
@@ -48,15 +54,16 @@ Requirements: Rust 1.99 with the `wasm32-unknown-unknown` target (pinned by
 nearcore 2.14.0, is downloaded by `near-workspaces`).
 
 One command runs everything below in order: `scripts/check.sh`. Expect the
-three constraint counts, `all checks passed`, `swap cycle passed` and
+constraint counts, `all checks passed`, `swap cycle passed` and
 `test result: ok` lines, in about ten minutes on first run (dependencies and
 the sandbox download) and about two minutes after that.
 
 1. `cargo test -p antumbra-core --all-features -p antumbra-circuits --release -- --nocapture`
    Unit tests: gadget-vs-native hash and tree consistency, note encryption,
    AMM arithmetic, and the three circuits (prints `joinsplit constraints:
-   17376`, `swap constraints: 17625`, `swapclaim constraints: 22349`), plus a
-   native prove-and-verify. Expect all tests to pass.
+   17376`, `swap constraints: 24330`, `swapclaim constraints: 22349`, and
+   `seal gadget constraints: 6448` for the encryption inside the swap
+   circuit), plus a native prove-and-verify. Expect all tests to pass.
 2. `scripts/build-contracts.sh`
    Regenerates `keys/*.vk.near` (prints their sha256; identical on every
    machine) and builds both contracts to `target/wasm32-unknown-unknown/release/`.
@@ -122,16 +129,20 @@ test stablecoin NEAR's DEXes use).
    built in a Web Worker in about three seconds and the amount goes on-chain
    sealed (Geek mode shows the batch with one entry and no amount). When the
    epoch (20 blocks) ends, the pool's sealer clears it and the swap card turns
-   from *sealed* to *cleared*; with a dev key the page claims your share by
-   itself, with a wallet press *Claim*. The bought USDC.e appears in the shade.
+   from *sealed* to *cleared*: within half a minute while the pool's operator
+   runs a sealer next to it, within about six minutes when only the sealer
+   workflow is clearing the pool, so leave the page open. With a dev key the
+   page then claims your share by itself, with a wallet press *Claim*. The
+   bought USDC.e appears in the shade.
 4. **Threshold → Out of the shade** sends any amount back to a NEAR account
    (yours by default); **To another shade** is a private transfer to a
    shielded address. Every step lists in *Activity* what the chain saw.
 
-Proving keys are regenerated from the seeded setups on first use (about half
-a minute per circuit, once) and cached in IndexedDB. The wallet (keys and
-notes) lives in localStorage; export it from *Backup / restore* before
-clearing site data. `npm run build` produces a static site in `web/dist`.
+Proving keys are regenerated from the seeded setups on first use (about four
+seconds per circuit on a recent laptop, longer on a slower machine, once) and
+cached in IndexedDB. The wallet (keys and notes) lives in localStorage; export
+it from *Backup / restore* before clearing site data. `npm run build`
+produces a static site in `web/dist`.
 The wasm bindings in `web/src/wasm` are committed; after changing the Rust
 crates rebuild them with `scripts/build-wasm.sh` (needs `wasm-pack`).
 
@@ -186,19 +197,71 @@ little later than with a sealer running next to it. `deploy --token wrap.testnet
 base units>` registers existing NEP-141 tokens instead of deploying test ones
 (the deployer must hold the liquidity: `antumbra wrap --amount <yocto>` wraps
 NEAR, `antumbra mint` works on the fakes); that is how the testnet pool in
-`deployment.json` was made. To clear epochs inside a TEE
-instead, build the sealer program (`cargo build -p antumbra-sealer --target
-wasm32-wasip1 --release`), publish it at an https URL, give the program a
-`PROTECTED_SEALER_SEED` secret in OutLayer, register the same public key
-plus `--outlayer-account outlayer.testnet --wasm-url … --wasm-hash …` with
-`antumbra sealer register`, and `end_epoch` (with a deposit for the
-execution fee) asks the enclave to clear the batch. This path is wired in the
-contract but was not exercised end to end during the hackathon.
+`deployment.json` was made. A pool can also have its epochs cleared inside a
+TEE, by a sealer key that no person holds: see
+[Clearing inside a TEE](#clearing-inside-a-tee).
 
 `deploy` also works against a local sandbox: pass `--network http://127.0.0.1:3030
 --account test.near --key <validator key>` and the contracts go to fresh
 subaccounts. The NEAR account that signs a transaction is visible on-chain as
 the gas payer; use a dedicated account (or a relayer) when that link matters.
+
+## Clearing inside a TEE
+
+A second pool on testnet, `deployment-tee.json`, has a sealer key that was
+generated inside OutLayer's Intel TDX keystore and has never been outside an
+enclave. Nobody holds a copy, the pool's operator included. An epoch there is
+cleared by one call to the pool, `end_epoch`, which any account can make:
+
+1. The pool sends the epoch's sealed entries to `outlayer.testnet`. The
+   request names the sealer program (`crates/antumbra-sealer`, built for WASI)
+   by its sha256 and the secret that only that build may read.
+2. An attested worker runs the program on the entries and returns the totals
+   per direction: 30 million instructions and about half a second for a batch
+   of one.
+3. The pool's callback checks that the answer is for exactly this batch and
+   executes it. Claims then work as on the other pool.
+
+What ran on testnet on 11 November 2026 (pool, program and public key are in
+`deployment-tee.json` and `deployment-tee.outlayer.json`):
+
+| What | Transaction |
+| --- | --- |
+| `end_epoch` for epoch 13862099: request to OutLayer, run in the enclave, batch executed, 23 Tgas in all | [CWXkTKea…](https://testnet.nearblocks.io/txns/CWXkTKeaNeLugtdFATkVt4bpaRZZBEMtkqBnG8zoMUr8) |
+| the key read out of the enclave | [Gaysqr55…](https://testnet.nearblocks.io/txns/Gaysqr55Lvf1mC4Lx7TMxj3J96o22A4TGZSrU2CRAxSt) |
+| the key and the OutLayer program registered on the pool | [kVMGzSGQ…](https://testnet.nearblocks.io/txns/kVMGzSGQtd5H74sRWcviDqPSz4WSnAU7N52t7T1bSvE) |
+| an outside account asking the enclave directly with the pool's secret: refused | [B7ifgeXm…](https://testnet.nearblocks.io/txns/B7ifgeXmze3aquzsdriv1e5AtxCeiD5zuQSDQs8LhycH) |
+
+Three swaps were sealed to that key, cleared this way and claimed.
+
+`scripts/outlayer.mjs` does the setup for a pool you deployed, one step per
+run (`cd web && npm install` first, for near-api-js):
+
+```
+cargo build -p antumbra-sealer --target wasm32-wasip1 --release
+node scripts/outlayer.mjs my-pool.json upload      # the program goes to FastFS; prints its URL and sha256
+node scripts/outlayer.mjs my-pool.json secret      # the keystore generates PROTECTED_SEALER_SEED in the enclave
+node scripts/outlayer.mjs my-pool.json pubkey      # the program runs once in the enclave and returns the sealer's key
+node scripts/outlayer.mjs my-pool.json register    # set_sealer: that key, the program's URL and hash
+node scripts/outlayer.mjs my-pool.json lock        # the secret opens only for requests the pool account makes
+node scripts/outlayer.mjs my-pool.json end-epoch <epoch>   # clear a finished epoch (0.02 NEAR attached, the rest comes back to the pool)
+```
+
+What this does and does not give:
+
+- The secret is bound to the program's hash and, after `lock`, opens only for
+  requests made by the pool account. Nobody else can hand the enclave a single
+  entry and read its amount back; the outside account in the table tried.
+- The pool account in this demo still has its full-access key, so that it can
+  be fixed during the hackathon. Whoever holds that key can replace the
+  contract and can make such a request in the pool's name. Deleting the key
+  closes both; it was not done here.
+- The signed-executor call is closed on this pool: the executor key registered
+  with it was generated and thrown away.
+- Someone has to call `end_epoch` for an epoch that has swaps. The hosted
+  wallet follows the first pool, where the workflow does the clearing.
+- OutLayer's own trust assumptions (who can change its contract and approve
+  worker images at this stage) are stated in its documentation.
 
 ## How a private transfer works
 
@@ -246,7 +309,7 @@ belongs to which swap.
 | Groth16 verification, BLS12-381 host functions, 8 public inputs | ~17 |
 | Poseidon(2) hash in wasm | ~1.5 |
 | deposit (`ft_transfer_call` round trip, one tree insert) | 38 total |
-| join-split transfer (verify + 2 tree inserts) | 83 |
+| join-split transfer (verify + 2 tree inserts) | 84 |
 | join-split withdrawal (same + `ft_transfer`) | 88 total |
 | sealed swap (verify 16 public inputs + 2 tree inserts) | 92 |
 | end_epoch_signed (signature check + batch execution) | 12 |
