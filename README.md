@@ -1,5 +1,7 @@
 # Antumbra
 
+[![Check](https://github.com/Valentine1898/antumbra/actions/workflows/check.yml/badge.svg)](https://github.com/Valentine1898/antumbra/actions/workflows/check.yml)
+
 On a public chain every balance, trade and counterparty is visible forever,
 and a visible order can be front-run. Antumbra is a shielded pool with batch
 swaps on NEAR: tokens are deposited into private notes, transferred privately
@@ -55,8 +57,11 @@ nearcore 2.14.0, is downloaded by `near-workspaces`).
 
 One command runs everything below in order: `scripts/check.sh`. Expect the
 constraint counts, `all checks passed`, `swap cycle passed` and
-`test result: ok` lines, in about ten minutes on first run (dependencies and
-the sandbox download) and about two minutes after that.
+`test result: ok` lines, in ten to fifteen minutes on first run (dependencies
+and the sandbox download) and about two minutes after that. The same script
+runs on a clean Linux machine in the `Check` workflow
+(`.github/workflows/check.yml`), which also compares the regenerated
+verifying keys with the committed ones.
 
 1. `cargo test -p antumbra-core --all-features -p antumbra-circuits --release -- --nocapture`
    Unit tests: gadget-vs-native hash and tree consistency, note encryption,
