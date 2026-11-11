@@ -335,7 +335,7 @@ function renderWallet() {
     let note = '';
     if (x.claimed) chip = '<span class="chip ok">claimed</span>';
     else if (!epochInfo || x.epoch >= epochInfo.epoch) { chip = '<span class="chip hot">sealed</span>'; note = epochInfo ? `epoch ends in ${epochInfo.blocks_left} blocks` : ''; }
-    else if (!batchCleared.get(x.epoch)) { chip = '<span class="chip hot">sealed</span>'; note = 'epoch over, the sealer is clearing it'; }
+    else if (!batchCleared.get(x.epoch)) { chip = '<span class="chip hot">sealed</span>'; note = 'epoch over, the sealer clears it within seconds to a few minutes'; }
     else if (claiming) chip = '<span class="chip">claiming…</span>';
     else { chip = '<span class="chip ok">cleared</span>'; note = signer?.kind === 'devkey' ? 'claiming shortly' : 'ready to claim'; }
     card.innerHTML = `${chip}<span class="what">${amountText(sold, x.delta)} → ${token(bought).symbol}<span class="muted"> · epoch ${x.epoch}${note ? ' · ' + note : ''}</span></span>`;
@@ -599,6 +599,8 @@ function crossing(dir: 'in' | 'out') {
 }
 
 // ---------- the threshold: into, out of, or within the shade ----------
+/// NEAR's account id rule: lowercase alphanumeric parts joined by single `-`, `_` or `.`.
+const NEAR_ACCOUNT_ID = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
 const ROUTES: Record<Route, { hint: string; verb: string; to: string | null }> = {
   in: { hint: 'Public: the amount and a note commitment. <em>Hidden: who owns the note.</em>', verb: 'Shield', to: null },
   out: { hint: 'Public: the amount and the receiving account. <em>Hidden: which note paid.</em>', verb: 'Unshield', to: 'To NEAR account' },
@@ -606,6 +608,8 @@ const ROUTES: Record<Route, { hint: string; verb: string; to: string | null }> =
 };
 
 function setRoute(r: Route) {
+  // The recipient field means a NEAR account on one route and a shielded address on another: never carry it over.
+  if (r !== route) ($('move-to') as HTMLInputElement).value = '';
   route = r;
   document.querySelectorAll<HTMLButtonElement>('.routes button').forEach((b) => b.classList.toggle('active', b.dataset.route === r));
   $('move-hint').innerHTML = ROUTES[r].hint;
@@ -643,6 +647,8 @@ async function doMove(btn: HTMLButtonElement) {
       void refreshLight();
     } else if (route === 'out') {
       const dest = to || s.accountId;
+      if (dest.startsWith('antumbra:')) throw new Error('that is a shielded address: send to it with "To another shade", or enter a NEAR account here');
+      if (dest.length < 2 || dest.length > 64 || !NEAR_ACCOUNT_ID.test(dest)) throw new Error(`"${dest}" is not a NEAR account id`);
       await ensureRegistered(t.account, dest);
       const ok = await proveAndSend('withdraw', { asset_id: t.assetId, amount, to: dest }, `unshielded ${human} ${t.symbol} to ${dest}`);
       if (ok) crossing('out');
