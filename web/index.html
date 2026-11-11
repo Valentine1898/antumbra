@@ -23,6 +23,7 @@
           <a href="#threshold" data-page="threshold" class="active">Threshold</a>
           <a href="#swap" data-page="swap">Swap</a>
         </nav>
+        <span id="pool-chip" class="chip hidden" title="This pool's epochs are cleared inside a TEE; nobody holds its sealer key">TEE pool</span>
       </div>
       <div class="bar-right">
         <button id="signer-pill" class="pill" title="Who pays gas for your transactions">choose who pays gas</button>
@@ -91,6 +92,7 @@
             <div class="panel-head"><h3>Swap in the shade</h3><span id="epoch-pill" class="muted small mono"></span></div>
             <form id="form-swap">
               <p class="hint">The amount is sealed; only the sealer opens it to clear the epoch. <em>Hidden: who swaps, and how much.</em> One price for everyone in the epoch.</p>
+              <p id="pool-switch" class="muted small pool-switch"></p>
               <div class="fields">
                 <label>Sell <input id="swap-amount" inputmode="decimal" placeholder="0.1" autocomplete="off" /></label>
                 <label>Token <select id="swap-sell"></select></label>
@@ -126,7 +128,7 @@
             <dt>sealer</dt><dd id="sealer" class="mono"></dd>
           </dl>
           <div class="row">
-            <button id="end-epoch" class="ghost">Clear last epoch via TEE</button>
+            <button id="end-epoch" class="ghost hidden">Clear an epoch via TEE</button>
           </div>
         </section>
 

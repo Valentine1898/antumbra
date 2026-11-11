@@ -1,17 +1,23 @@
 // Browser storage: the wallet JSON and signer choice in localStorage,
 // proving keys (a few megabytes each) in IndexedDB.
 
+import { POOL_VARIANT } from './pool';
+
 const PREFIX = 'antumbra.';
+/// The gas payer and the display mode are the same whichever pool the page
+/// follows; the wallet and what it knows of a pool are kept per pool.
+const SHARED = new Set(['signer', 'mode']);
+const name = (key: string) => PREFIX + (POOL_VARIANT && !SHARED.has(key) ? `${POOL_VARIANT}.` : '') + key;
 
 export const local = {
   get(key: string): string | null {
-    try { return localStorage.getItem(PREFIX + key); } catch { return null; }
+    try { return localStorage.getItem(name(key)); } catch { return null; }
   },
   set(key: string, value: string) {
-    try { localStorage.setItem(PREFIX + key, value); } catch { /* private mode */ }
+    try { localStorage.setItem(name(key), value); } catch { /* private mode */ }
   },
   del(key: string) {
-    try { localStorage.removeItem(PREFIX + key); } catch { /* ignore */ }
+    try { localStorage.removeItem(name(key)); } catch { /* ignore */ }
   },
 };
 

@@ -3,7 +3,7 @@ name: Deploy web wallet to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ["web/**", "deployment.json", ".github/workflows/pages.yml"]
+    paths: ["web/**", "deployment.json", "deployment-tee.json", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: cp deployment.json web/public/deployment.json
+      - run: cp deployment.json deployment-tee.json web/public/
       - run: npm ci
         working-directory: web
       - run: npm run build -- --base=/antumbra/

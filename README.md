@@ -93,7 +93,9 @@ The `spike` crates are independent: see [spike results](#spike-results-day-1).
 ## Try it in the browser
 
 Hosted: **https://valentine1898.github.io/antumbra/** (built from `web/` by
-the Pages workflow on every push). Or run it locally:
+the Pages workflow on every push; the same wallet on the pool that is cleared
+inside a TEE: https://valentine1898.github.io/antumbra/?pool=tee). Or run it
+locally:
 
 ```
 cd web && npm install && npm run dev
@@ -137,6 +139,16 @@ test stablecoin NEAR's DEXes use).
 4. **Threshold → Out of the shade** sends any amount back to a NEAR account
    (yours by default); **To another shade** is a private transfer to a
    shielded address. Every step lists in *Activity* what the chain saw.
+
+The Swap page also links to the second pool, the one whose sealer runs
+inside a TEE (`?pool=tee` in the URL, see
+[Clearing inside a TEE](#clearing-inside-a-tee)). The wallet keeps separate
+notes for that pool and the same gas payer. There the page asks for the
+clearing itself: once the epoch of your swap is over it calls `end_epoch`
+with 0.01 NEAR attached, the enclave opens the batch, *epoch … cleared inside
+the TEE* appears in Activity and the claim follows, about twenty seconds
+after the swap. With a wallet instead of a dev key the swap card gets a
+*Clear via TEE* button.
 
 Proving keys are regenerated from the seeded setups on first use (about four
 seconds per circuit on a recent laptop, longer on a slower machine, once) and
@@ -258,8 +270,9 @@ What this does and does not give:
   closes both; it was not done here.
 - The signed-executor call is closed on this pool: the executor key registered
   with it was generated and thrown away.
-- Someone has to call `end_epoch` for an epoch that has swaps. The hosted
-  wallet follows the first pool, where the workflow does the clearing.
+- Someone has to call `end_epoch` for an epoch that has swaps. The web wallet
+  does it for its own swaps when it follows this pool (`?pool=tee`); nothing
+  else watches the pool.
 - OutLayer's own trust assumptions (who can change its contract and approve
   worker images at this stage) are stated in its documentation.
 

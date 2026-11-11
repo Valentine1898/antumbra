@@ -1,6 +1,6 @@
 import './style.css';
 import init, * as wasm from './wasm/antumbra_wasm.js';
-import { Chain, loadDeployment, type Deployment, type EpochInfo, type PairInfo } from './chain';
+import { Chain, loadDeployment, teePoolAvailable, type Deployment, type EpochInfo, type PairInfo } from './chain';
 import { DevKeySigner, WalletSigner, createDevAccount, type Signer, type TxResult } from './signer';
 import { getProvingKey, local, putProvingKey } from './storage';
 
@@ -9,6 +9,12 @@ const rpcParam = new URLSearchParams(location.search).get('rpc');
 const RPC_URLS = [...(rpcParam ? [rpcParam] : []), 'https://test.rpc.fastnear.com', 'https://near-testnet.drpc.org', 'https://rpc.testnet.near.org'];
 const EXPLORER = 'https://testnet.nearblocks.io';
 const GAS_POOL = 200;
+/// What a clearing inside the TEE is sent with. OutLayer wants its worst-case
+/// estimate up front (about 0.007 NEAR) and returns what it does not use to the pool.
+const TEE_DEPOSIT = '10000000000000000000000';
+/// A request the enclave never answers fails after two hundred blocks, about two
+/// minutes; only then is an epoch asked for again.
+const TEE_RETRY_MS = 150_000;
 const GAS_FT = 100;
 const EPOCH_BLOCKS = 20;
 /// NEP-145 registration deposit; a token refunds whatever exceeds its minimum.
@@ -36,6 +42,11 @@ let claiming = false;
 let tick = 0;
 /// For each epoch of a pending swap: whether the sealer has cleared its batch.
 const batchCleared = new Map<number, boolean>();
+/// Whether this pool's epochs are cleared inside a TEE (OutLayer) rather than by an operator's sealer.
+let teePool = false;
+/// Epochs this page has asked the TEE to clear, and when.
+const teeAsked = new Map<number, number>();
+let teeBusy = false;
 /// What the gas payer holds in public: token account → base units, plus NEAR.
 let publicBalances: Record<string, string> = {};
 let nearBalance: string | null = null;
@@ -316,7 +327,7 @@ let lastRender = '';
 function renderWallet() {
   if (!walletJson) return;
   const summaryJson = wasm.wallet_summary(walletJson);
-  const key = [summaryJson, epochInfo?.epoch, epochInfo?.blocks_left, pair?.pair_id, claiming, signer?.kind, [...batchCleared.entries()].join(','), tokens.map((t) => t.symbol).join()].join('|');
+  const key = [summaryJson, epochInfo?.epoch, epochInfo?.blocks_left, pair?.pair_id, claiming, signer?.kind, teePool, [...teeAsked.keys()].join(','), [...batchCleared.entries()].join(','), tokens.map((t) => t.symbol).join()].join('|');
   if (key === lastRender) return;
   lastRender = key;
   const s = JSON.parse(summaryJson);
@@ -335,7 +346,12 @@ function renderWallet() {
     let note = '';
     if (x.claimed) chip = '<span class="chip ok">claimed</span>';
     else if (!epochInfo || x.epoch >= epochInfo.epoch) { chip = '<span class="chip hot">sealed</span>'; note = epochInfo ? `epoch ends in ${epochInfo.blocks_left} blocks` : ''; }
-    else if (!batchCleared.get(x.epoch)) { chip = '<span class="chip hot">sealed</span>'; note = 'epoch over, the sealer clears it within seconds to a few minutes'; }
+    else if (!batchCleared.get(x.epoch)) {
+      chip = '<span class="chip hot">sealed</span>';
+      if (!teePool) note = 'epoch over, the sealer clears it within seconds to a few minutes';
+      else if (teeAsked.has(x.epoch)) note = 'epoch over, the TEE is clearing it';
+      else note = signer?.kind === 'devkey' ? 'epoch over, asking the TEE to clear it' : 'epoch over, ask the TEE to clear it';
+    }
     else if (claiming) chip = '<span class="chip">claiming…</span>';
     else { chip = '<span class="chip ok">cleared</span>'; note = signer?.kind === 'devkey' ? 'claiming shortly' : 'ready to claim'; }
     card.innerHTML = `${chip}<span class="what">${amountText(sold, x.delta)} → ${token(bought).symbol}<span class="muted"> · epoch ${x.epoch}${note ? ' · ' + note : ''}</span></span>`;
@@ -344,6 +360,14 @@ function renderWallet() {
       btn.className = 'ghost tiny';
       btn.textContent = 'Claim';
       btn.addEventListener('click', () => void busy(btn, () => claimSwap(x)));
+      card.appendChild(btn);
+    }
+    // With a wallet every call is confirmed by hand, so on a TEE pool the clearing gets a button of its own.
+    if (teePool && !x.claimed && epochInfo && x.epoch < epochInfo.epoch && batchCleared.get(x.epoch) === false && signer?.kind !== 'devkey' && !teeAsked.has(x.epoch)) {
+      const btn = document.createElement('button');
+      btn.className = 'ghost tiny';
+      btn.textContent = 'Clear via TEE';
+      btn.addEventListener('click', () => void busy(btn, () => clearViaTee(x.epoch)));
       card.appendChild(btn);
     }
     sw.appendChild(card);
@@ -533,8 +557,11 @@ async function refreshPool() {
       const sealer = await chain.getSealer();
       $('sealer').textContent = sealer ? `${sealer.pk[0].slice(0, 10)}… (${sealer.outlayer ? 'OutLayer TEE' : 'signed executor'})` : 'none registered';
       sealerShown = true;
+      teePool = !!sealer?.outlayer;
+      void renderPoolSwitch();
     }
     await refreshBatches();
+    void autoClearViaTee();
     updateSwapBuy();
     renderWallet();
     if (tick++ % 3 === 0) void refreshLight();
@@ -707,19 +734,75 @@ async function autoClaim() {
   }
 }
 
-/// Asks OutLayer to clear the last finished epoch inside a TEE (only when the pool is configured for it).
+/// Asks the pool to have one finished epoch cleared inside the TEE. Any account
+/// may: the pool sends its own batch to OutLayer and executes what comes back.
+async function clearViaTee(epoch: number) {
+  const s = requireSigner();
+  teeAsked.set(epoch, Date.now());
+  renderWallet();
+  setToast('Asking the TEE to clear the epoch…', true);
+  try {
+    const r = await s.call(deployment.pool, 'end_epoch', { epoch, pair_id: deployment.pair_id }, GAS_POOL, TEE_DEPOSIT);
+    if (r === 'redirect') return;
+    if (r.ok) log(`epoch ${epoch} cleared inside the TEE`, { hash: r.hash });
+    else if (!/already cleared/.test(r.error ?? '')) log(`the TEE did not clear epoch ${epoch}: ${r.error}`, { hash: r.hash, error: true });
+  } catch (e) {
+    // The call waits for the enclave, and an RPC endpoint may stop waiting
+    // first. That is not a failure: the batch itself says whether it was cleared.
+    console.warn('end_epoch', e);
+  } finally {
+    setToast('');
+  }
+  await refreshBatches();
+  renderWallet();
+  void autoClaim();
+}
+
+/// With a dev key there is nothing to confirm, so on a TEE pool the page asks
+/// for the clearing of every finished epoch that holds one of its swaps.
+async function autoClearViaTee() {
+  if (!teePool || teeBusy || !walletJson || !epochInfo || signer?.kind !== 'devkey') return;
+  const due = new Set<number>();
+  for (const x of summary().swaps as SwapEntry[]) {
+    if (x.claimed || x.epoch >= epochInfo.epoch || batchCleared.get(x.epoch) !== false) continue;
+    if (Date.now() - (teeAsked.get(x.epoch) ?? 0) > TEE_RETRY_MS) due.add(x.epoch);
+  }
+  if (due.size === 0) return;
+  teeBusy = true;
+  try {
+    for (const epoch of due) await clearViaTee(epoch);
+  } catch (e) {
+    fail(e);
+  } finally {
+    teeBusy = false;
+  }
+}
+
+/// The Geek panel's button: clears the oldest finished epoch that holds one of
+/// this wallet's swaps, or the last finished epoch when there is none.
 async function doEndEpoch(btn: HTMLButtonElement) {
   await busy(btn, async () => {
-    const s = requireSigner();
-    const sealer = await chain.getSealer();
-    if (!sealer?.outlayer) throw new Error('this pool clears epochs through its signed sealer; nothing to trigger from here');
-    const e = (await chain.currentEpoch()).epoch - 1;
-    setToast('Asking the TEE to clear the last epoch…', true);
-    const r = await s.call(deployment.pool, 'end_epoch', { epoch: e, pair_id: deployment.pair_id }, 150, '100000000000000000000000');
-    if (r === 'redirect') return;
-    reportTx(`epoch ${e} sent to the sealer`, r);
+    requireSigner();
+    if (!teePool) throw new Error('this pool clears epochs through its signed sealer; nothing to trigger from here');
+    const current = (await chain.currentEpoch()).epoch;
+    const mine = (summary().swaps as SwapEntry[]).filter((x) => !x.claimed && x.epoch < current && !batchCleared.get(x.epoch)).map((x) => x.epoch);
+    await clearViaTee(mine.length ? Math.min(...mine) : current - 1);
     await refreshPool();
   });
+}
+
+/// Says under the swap form who seals this pool, with a way to the other pool when the site serves both.
+async function renderPoolSwitch() {
+  $('end-epoch').classList.toggle('hidden', !teePool);
+  $('pool-chip').classList.toggle('hidden', !teePool);
+  const el = $('pool-switch');
+  if (teePool) {
+    el.innerHTML = `This pool's sealer runs inside a TEE: its key was generated in the enclave and nobody holds it. <a href="${location.pathname}#swap">The pool with an operator's sealer →</a>`;
+  } else if (await teePoolAvailable()) {
+    el.innerHTML = `This pool's sealer is run by the pool's operator. <a href="${location.pathname}?pool=tee#swap">Try the pool whose sealer runs inside a TEE →</a>`;
+  } else {
+    el.textContent = '';
+  }
 }
 
 // ---------- signer UI ----------

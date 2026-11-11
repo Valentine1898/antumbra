@@ -187,6 +187,10 @@ button.tiny { padding: 3px 9px; font-size: 11px; border-radius: 8px; }
 .ghost.danger { color: var(--bad); border-color: rgba(255, 123, 123, 0.4); }
 .ghost.file input { display: none; }
 button.link { background: none; border: 0; color: var(--blue); padding: 0 4px; cursor: pointer; font: 500 13px var(--sans); }
+.pool-switch { margin: -4px 0 14px; }
+.pool-switch:empty { display: none; }
+.pool-switch a { color: var(--blue); text-decoration: none; white-space: nowrap; }
+.pool-switch a:hover { text-decoration: underline; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .row.end { justify-content: flex-end; }
 .bar-track { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); margin: 2px 0 6px; overflow: hidden; }

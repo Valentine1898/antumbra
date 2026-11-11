@@ -1,5 +1,6 @@
 // Read-only view of the pool and tokens through NEAR RPC endpoints.
 import { FailoverRpcProvider, JsonRpcProvider } from 'near-api-js';
+import { DEPLOYMENT_FILE } from './pool';
 
 /// Public testnet RPCs rate-limit per IP; a failover provider moves on to the next one when a call fails.
 export function makeProvider(urls: string[]): FailoverRpcProvider {
@@ -70,7 +71,17 @@ export class Chain {
 }
 
 export async function loadDeployment(): Promise<Deployment> {
-  const res = await fetch(import.meta.env.BASE_URL + 'deployment.json');
-  if (!res.ok) throw new Error('deployment.json missing');
+  const res = await fetch(import.meta.env.BASE_URL + DEPLOYMENT_FILE);
+  if (!res.ok) throw new Error(`${DEPLOYMENT_FILE} missing`);
   return res.json();
+}
+
+/// Whether the site also serves a pool cleared inside a TEE (deployment-tee.json).
+export async function teePoolAvailable(): Promise<boolean> {
+  try {
+    const res = await fetch(import.meta.env.BASE_URL + 'deployment-tee.json');
+    return res.ok && typeof (await res.json()).pool === 'string';
+  } catch {
+    return false;
+  }
 }
