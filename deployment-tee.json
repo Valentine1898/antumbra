@@ -1,0 +1,10 @@
+{
+  "network": "testnet",
+  "pool": "pool-e70802.antumbra-demo-20261111161302.testnet",
+  "tokens": [
+    "wrap.testnet",
+    "usdc.fakes.testnet"
+  ],
+  "pair_id": 1,
+  "deployer": "antumbra-demo-20261111161302.testnet"
+}

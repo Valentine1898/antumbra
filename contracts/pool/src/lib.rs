@@ -39,6 +39,13 @@ pub const MAX_AMOUNT: u128 = (1u128 << 112) - 1;
 pub const MAX_BATCH_ENTRIES: usize = 512;
 const GAS_OUTLAYER_REQUEST: Gas = Gas::from_tgas(100);
 const GAS_OUTLAYER_CALLBACK: Gas = Gas::from_tgas(30);
+/// What the sealer program may use inside OutLayer. The limits have to be
+/// spelled out: OutLayer's workers skip a request that leaves them empty, and
+/// the call then waits out its two hundred blocks and fails. One entry takes
+/// about 25 million instructions (measured), so this covers a batch of 512.
+const OUTLAYER_MAX_INSTRUCTIONS: u64 = 20_000_000_000;
+const OUTLAYER_MAX_MEMORY_MB: u32 = 128;
+const OUTLAYER_MAX_SECONDS: u64 = 60;
 
 const GAS_FT_TRANSFER: Gas = Gas::from_tgas(10);
 
@@ -596,7 +603,11 @@ impl Pool {
         );
         let mut args = near_sdk::serde_json::json!({
             "source": {"WasmUrl": {"url": ol.wasm_url, "hash": ol.wasm_hash, "build_target": "wasm32-wasip1"}},
-            "resource_limits": {},
+            "resource_limits": {
+                "max_instructions": OUTLAYER_MAX_INSTRUCTIONS,
+                "max_memory_mb": OUTLAYER_MAX_MEMORY_MB,
+                "max_execution_seconds": OUTLAYER_MAX_SECONDS,
+            },
             "input_data": input,
             "response_format": "Text",
         });

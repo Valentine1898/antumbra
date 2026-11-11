@@ -1,0 +1,12 @@
+{
+  "wasm_hash": "3a267557902de8fbd29856659ba99e60913ff14bb026a727f617e4654b860c0a",
+  "wasm_url": "https://test.fastfs.io/antumbra-demo-20261111161302.testnet/outlayer.testnet/3a267557902de8fbd29856659ba99e60913ff14bb026a727f617e4654b860c0a.wasm",
+  "upload_tx": "Es5aXSVeRRaCjKg2mVu4nkrSsTdfjh2kNvX22Z5BEQab",
+  "pk": [
+    "afab1968fd0144cd1a128f850af5a735f78f33f7a112cbbd028367107e93e868",
+    "6506cf761331eee73c45e4258eeff90d6f5c9908f4b50105b3a6754a71edb863"
+  ],
+  "pubkey_tx": "Gaysqr55Lvf1mC4Lx7TMxj3J96o22A4TGZSrU2CRAxSt",
+  "register_tx": "kVMGzSGQtd5H74sRWcviDqPSz4WSnAU7N52t7T1bSvE",
+  "lock_tx": "FgYPcACxCRoQjwQkhCRBiXmn1YAX3YiqkZEoEoKimxJr"
+}
