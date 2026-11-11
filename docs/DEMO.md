@@ -95,6 +95,14 @@ Reply 2, text only: what NEAR makes possible:
 > 
 > A sealer built for a TEE opens each epoch's batch, and the net leg is priced on NEAR Intents (a dry run for now).
 
+Reply 3, text only, for after the TEE run of 11 November (the second pool,
+`deployment-tee.json`):
+
+> Update: the sealer now runs inside a TEE on testnet. Its key was generated in an Intel TDX enclave on OutLayer, and no person holds it. Anyone can call end_epoch: the enclave opens the batch and returns only the totals.
+> 
+> One clearing, on chain:
+> https://testnet.nearblocks.io/txns/CWXkTKeaNeLugtdFATkVt4bpaRZZBEMtkqBnG8zoMUr8
+
 ## Submission form (nearhackathon.com/#apply)
 
 One submission per project, before 14 November 2026 23:59 UTC, and it cannot
